@@ -1,0 +1,327 @@
+// Esquema de base de datos — Fiskaria (Sistema de Facturación Homologado)
+// Fuente de verdad: repo SDD (Spec-Driven-Development-Fiscaria).
+// Ver: arquitectura/base-de-datos.md, ADR-0002 (RBAC granular), módulo 11.
+//
+// Convenciones:
+//   - Dinero como Decimal (NUNCA Float); tasas Decimal(18,6).
+//   - Multi-tenant: una sola BD, separación lógica por contribuyenteId (RN-122).
+//   - Tablas de identidad con PK uuid (ADR-0002).
+//   - Documentos fiscales y auditoría: append-only desde la lógica de negocio.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ──────────────────────────────────────────────────────────────
+// Identidad y tenencia (multi-tenant) — RN-122, RN-124
+// ──────────────────────────────────────────────────────────────
+
+enum TipoContribuyente {
+  ORDINARIO
+  ESPECIAL
+  FORMAL
+}
+
+enum PeriodoIva {
+  QUINCENAL
+  MENSUAL
+}
+
+/// Comercio afiliado (el "tenant"). Su alta la realiza Sirumatek (RN-134).
+model Contribuyente {
+  id                 String             @id @default(uuid())
+  rif                String             @unique
+  razonSocial        String             @map("razon_social")
+  tipoContribuyente  TipoContribuyente  @default(ORDINARIO) @map("tipo_contribuyente")
+  agenteRetencion    Boolean            @default(false) @map("agente_retencion") // habilita retenciones (RN-129)
+  periodoIva         PeriodoIva?        @map("periodo_iva") // quincenal/mensual (RN-130)
+  domicilioFiscal      String?              @map("domicilio_fiscal")
+  validado             Boolean              @default(false) @map("validado") // vía API SENIAT (RN-101)
+  usuarios             Usuario[]
+  terceros             Tercero[]
+  productos            Producto[]
+  categoriasComerciales CategoriaComercial[]
+  puntosEmision        PuntoEmision[]
+  auditoria            RegistroAuditoria[]
+  createdAt            DateTime             @default(now()) @map("created_at")
+  updatedAt            DateTime             @updatedAt @map("updated_at")
+
+  @@map("contribuyentes")
+}
+
+// ──────────────────────────────────────────────────────────────
+// Terceros (clientes / proveedores) — Módulo 06, RN-104, RN-008
+// ──────────────────────────────────────────────────────────────
+
+/// Un tercero puede ser cliente y/o proveedor a la vez (RN-104, no se duplica).
+model Tercero {
+  id              String        @id @default(uuid())
+  contribuyenteId String        @map("contribuyente_id")
+  contribuyente   Contribuyente @relation(fields: [contribuyenteId], references: [id])
+  rif             String
+  tipoId          String        @map("tipo_id") // J, V, E, G, P, C (letra del RIF)
+  nombre          String
+  direccion       String?
+  telefono        String?
+  email           String?
+  esCliente       Boolean             @default(true) @map("es_cliente")
+  esProveedor     Boolean             @default(false) @map("es_proveedor")
+  rifValidado     Boolean             @default(false) @map("rif_validado") // requerido para facturar (RN-008)
+  activo          Boolean             @default(true)
+  productos       ProductoProveedor[]
+  createdAt       DateTime            @default(now()) @map("created_at")
+  updatedAt       DateTime            @updatedAt @map("updated_at")
+  deletedAt       DateTime?           @map("deleted_at")
+
+  @@unique([contribuyenteId, rif]) // un RIF no se duplica dentro del comercio
+  @@index([contribuyenteId])
+  @@map("terceros")
+}
+
+// ──────────────────────────────────────────────────────────────
+// Inventario — Módulo 05 (RN-102 IVA híbrido, RN-121 stock)
+// ──────────────────────────────────────────────────────────────
+
+enum TipoProducto {
+  ALMACENABLE
+  CONSUMIBLE
+  SERVICIO
+}
+
+/// Catálogo GLOBAL: determina la alícuota de IVA (RN-102). No lleva contribuyente.
+model CategoriaFiscal {
+  id          String     @id @default(uuid())
+  nombre      String     @unique
+  alicuotaIva Decimal    @map("alicuota_iva") @db.Decimal(5, 2)
+  productos   Producto[]
+
+  @@map("categorias_fiscales")
+}
+
+/// Agrupación organizativa por comercio. NO determina el IVA (I-L1).
+model CategoriaComercial {
+  id              String        @id @default(uuid())
+  contribuyenteId String        @map("contribuyente_id")
+  contribuyente   Contribuyente @relation(fields: [contribuyenteId], references: [id])
+  nombre          String
+  productos       Producto[]
+  createdAt       DateTime      @default(now()) @map("created_at")
+
+  @@unique([contribuyenteId, nombre])
+  @@index([contribuyenteId])
+  @@map("categorias_comerciales")
+}
+
+model Producto {
+  id                  String              @id @default(uuid())
+  contribuyenteId     String              @map("contribuyente_id")
+  contribuyente       Contribuyente       @relation(fields: [contribuyenteId], references: [id])
+  codigo              String
+  nombre              String
+  tipo                TipoProducto        @default(ALMACENABLE)
+  categoriaComercialId String?            @map("categoria_comercial_id")
+  categoriaComercial  CategoriaComercial? @relation(fields: [categoriaComercialId], references: [id])
+  categoriaFiscalId   String              @map("categoria_fiscal_id")
+  categoriaFiscal     CategoriaFiscal     @relation(fields: [categoriaFiscalId], references: [id])
+  ivaOverride         Decimal?            @map("iva_override") @db.Decimal(5, 2) // sobrescribe la alícuota de la categoría (RN-102)
+  precio              Decimal             @db.Decimal(18, 2)
+  stock               Decimal             @default(0) @db.Decimal(18, 3) // relevante solo si ALMACENABLE (RN-121)
+  stockMinimo         Decimal             @default(0) @map("stock_minimo") @db.Decimal(18, 3) // umbral de alerta
+  activo              Boolean             @default(true)
+  proveedores         ProductoProveedor[]
+  createdAt           DateTime            @default(now()) @map("created_at")
+  updatedAt           DateTime            @updatedAt @map("updated_at")
+  deletedAt           DateTime?           @map("deleted_at")
+
+  @@unique([contribuyenteId, codigo])
+  @@index([contribuyenteId])
+  @@map("productos")
+}
+
+/// Relación N:M producto ↔ proveedor (Tercero) — RN-104.
+model ProductoProveedor {
+  productoId String   @map("producto_id")
+  terceroId  String   @map("tercero_id")
+  producto   Producto @relation(fields: [productoId], references: [id], onDelete: Cascade)
+  tercero    Tercero  @relation(fields: [terceroId], references: [id], onDelete: Cascade)
+
+  @@id([productoId, terceroId])
+  @@map("productos_proveedores")
+}
+
+// ──────────────────────────────────────────────────────────────
+// Puntos de emisión y numeración correlativa — RN-006, RN-123, RN-128
+// ──────────────────────────────────────────────────────────────
+
+enum TipoDocumento {
+  FACTURA
+  NOTA_CREDITO
+  NOTA_DEBITO
+  GUIA_DESPACHO
+  RETENCION_IVA
+  RETENCION_ISLR
+}
+
+/// Sucursal/caja con numeración independiente (RN-123).
+model PuntoEmision {
+  id              String               @id @default(uuid())
+  contribuyenteId String               @map("contribuyente_id")
+  contribuyente   Contribuyente        @relation(fields: [contribuyenteId], references: [id])
+  codigo          String
+  nombre          String
+  activo          Boolean              @default(true)
+  secuencias      SecuenciaDocumento[]
+  createdAt       DateTime             @default(now()) @map("created_at")
+  updatedAt       DateTime             @updatedAt @map("updated_at")
+
+  @@unique([contribuyenteId, codigo])
+  @@index([contribuyenteId])
+  @@map("puntos_emision")
+}
+
+/// Contador correlativo por (punto de emisión, tipo de documento) — RN-128.
+/// `ultimo` se incrementa de forma atómica dentro de la transacción de emisión (RN-006).
+model SecuenciaDocumento {
+  id             String        @id @default(uuid())
+  puntoEmisionId String        @map("punto_emision_id")
+  puntoEmision   PuntoEmision  @relation(fields: [puntoEmisionId], references: [id], onDelete: Cascade)
+  tipo           TipoDocumento
+  ultimo         Int           @default(0)
+
+  @@unique([puntoEmisionId, tipo])
+  @@map("secuencias_documento")
+}
+
+// ──────────────────────────────────────────────────────────────
+// Autenticación y RBAC granular (Módulo 11 / ADR-0002)
+// ──────────────────────────────────────────────────────────────
+
+/// Usuario del sistema. Pertenece a un Contribuyente (NULL = admin Sirumatek).
+model Usuario {
+  id               String              @id @default(uuid())
+  contribuyenteId  String?             @map("contribuyente_id")
+  contribuyente    Contribuyente?      @relation(fields: [contribuyenteId], references: [id])
+  email            String              @unique
+  emailAlternativo String?             @map("email_alternativo") // recuperación (RN-014)
+  passwordHash     String              @map("password_hash")
+  passwordTemporal Boolean             @default(false) @map("password_temporal") // fuerza cambio (RN-014)
+  nombre           String
+  activo           Boolean             @default(true)
+  ultimoAcceso     DateTime?           @map("ultimo_acceso")
+  roles            UsuarioRol[]
+  refreshTokens    RefreshToken[]
+  auditoria        RegistroAuditoria[]
+  createdAt        DateTime            @default(now()) @map("created_at")
+  updatedAt        DateTime            @updatedAt @map("updated_at")
+  deletedAt        DateTime?           @map("deleted_at")
+
+  @@index([contribuyenteId])
+  @@map("usuarios")
+}
+
+/// Rol: agrupa permisos y se asigna a usuarios. Semilla: Administrador, Operador, Fiscal, Sirumatek.
+model Rol {
+  id          String       @id @default(uuid())
+  nombre      String       @unique
+  descripcion String?
+  usuarios    UsuarioRol[]
+  permisos    RolPermiso[]
+  createdAt   DateTime     @default(now()) @map("created_at")
+  updatedAt   DateTime     @updatedAt @map("updated_at")
+
+  @@map("roles")
+}
+
+/// Permiso granular: una acción sobre un módulo (ej. facturas:anular).
+model Permiso {
+  id          String       @id @default(uuid())
+  modulo      String
+  accion      String
+  descripcion String?
+  roles       RolPermiso[]
+
+  @@unique([modulo, accion])
+  @@map("permisos")
+}
+
+/// Relación N:M usuario ↔ rol.
+model UsuarioRol {
+  usuarioId String  @map("usuario_id")
+  rolId     String  @map("rol_id")
+  usuario   Usuario @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+  rol       Rol     @relation(fields: [rolId], references: [id], onDelete: Cascade)
+
+  @@id([usuarioId, rolId])
+  @@map("usuarios_roles")
+}
+
+/// Relación N:M rol ↔ permiso.
+model RolPermiso {
+  rolId     String  @map("rol_id")
+  permisoId String  @map("permiso_id")
+  rol       Rol     @relation(fields: [rolId], references: [id], onDelete: Cascade)
+  permiso   Permiso @relation(fields: [permisoId], references: [id], onDelete: Cascade)
+
+  @@id([rolId, permisoId])
+  @@map("roles_permisos")
+}
+
+/// Refresh tokens (hash) para rotación y revocación de sesión.
+model RefreshToken {
+  id        String   @id @default(uuid())
+  jti       String   @unique
+  usuarioId String   @map("usuario_id")
+  tokenHash String   @map("token_hash")
+  expiraEn  DateTime @map("expira_en")
+  revocado  Boolean  @default(false)
+  usuario   Usuario  @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([usuarioId])
+  @@map("refresh_tokens")
+}
+
+// ──────────────────────────────────────────────────────────────
+// Auditoría (append-only) — RN-004, U-L1
+// ──────────────────────────────────────────────────────────────
+
+/// Registro inmutable de operaciones sensibles. Solo se inserta; nunca se edita/borra.
+model RegistroAuditoria {
+  id              String         @id @default(uuid())
+  usuarioId       String?        @map("usuario_id")
+  usuario         Usuario?       @relation(fields: [usuarioId], references: [id])
+  contribuyenteId String?        @map("contribuyente_id")
+  contribuyente   Contribuyente? @relation(fields: [contribuyenteId], references: [id])
+  ip              String?
+  fechaHora       DateTime       @default(now()) @map("fecha_hora")
+  accion          String // login, emitir, anular, asiento...
+  entidad         String? // tabla/recurso afectado
+  entidadId       String?        @map("entidad_id")
+  detalle         Json?
+
+  @@index([usuarioId])
+  @@index([contribuyenteId])
+  @@index([fechaHora])
+  @@map("registro_auditoria")
+}
+
+// ──────────────────────────────────────────────────────────────
+// Tasas (caché de fallback) — RN-117
+// La tasa la provee el microservicio externo tasas-bcv; aquí solo se
+// persiste la última conocida para usar si el micro no responde.
+// ──────────────────────────────────────────────────────────────
+
+model TasaCache {
+  curCod    String   @map("cur_cod") // USD / EUR
+  validFrom DateTime @map("valid_from") @db.Date
+  ratExc    Decimal  @map("rat_exc") @db.Decimal(18, 6)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@id([curCod, validFrom])
+  @@map("tasa_cache")
+}
