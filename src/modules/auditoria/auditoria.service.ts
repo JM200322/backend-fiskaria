@@ -23,6 +23,22 @@ export class AuditoriaService {
 
   constructor(private readonly prisma: PrismaService) {}
 
+  /** Consulta del registro de auditoría, acotada por comercio (Sirumatek ve todo). */
+  consultar(
+    contribuyenteId: string | null,
+    filtros: { accion?: string; entidad?: string } = {},
+  ) {
+    return this.prisma.registroAuditoria.findMany({
+      where: {
+        ...(contribuyenteId ? { contribuyenteId } : {}),
+        accion: filtros.accion,
+        entidad: filtros.entidad,
+      },
+      orderBy: { fechaHora: 'desc' },
+      take: 100,
+    });
+  }
+
   async registrar(input: RegistroAuditoriaInput): Promise<void> {
     try {
       await this.prisma.registroAuditoria.create({

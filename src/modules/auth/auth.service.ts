@@ -132,6 +132,43 @@ export class AuthService {
     return this.emitirTokens(payload.sub, payload.email);
   }
 
+  /**
+   * Recuperación de acceso (RN-014): genera una clave temporal y obliga a cambiarla.
+   * Responde siempre genérico (no revela si el email existe). Mientras no haya SMTP, en
+   * entornos no productivos devuelve la clave temporal para poder probar el flujo.
+   */
+  async recuperar(email: string, ip?: string) {
+    const generico = { mensaje: 'Si el correo existe, se enviaron instrucciones de recuperación' };
+    const usuario = await this.prisma.usuario.findUnique({ where: { email } });
+    if (!usuario || !usuario.activo || usuario.deletedAt) {
+      return generico;
+    }
+
+    const claveTemporal = 'Tmp-' + randomUUID().replace(/-/g, '').slice(0, 10);
+    await this.prisma.usuario.update({
+      where: { id: usuario.id },
+      data: { passwordHash: await bcrypt.hash(claveTemporal, 10), passwordTemporal: true },
+    });
+    await this.prisma.refreshToken.updateMany({
+      where: { usuarioId: usuario.id, revocado: false },
+      data: { revocado: true },
+    });
+    await this.auditoria.registrar({
+      usuarioId: usuario.id,
+      contribuyenteId: usuario.contribuyenteId,
+      ip,
+      accion: 'recuperar_password',
+      entidad: 'usuario',
+      entidadId: usuario.id,
+    });
+
+    // TODO: enviar la clave por correo (SMTP) al email principal/alternativo (RN-014).
+    if (this.config.get<string>('env') !== 'production') {
+      return { ...generico, claveTemporal };
+    }
+    return generico;
+  }
+
   /** Cierra sesión revocando los refresh tokens vigentes del usuario. */
   async logout(usuarioId: string) {
     await this.prisma.refreshToken.updateMany({

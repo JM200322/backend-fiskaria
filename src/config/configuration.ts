@@ -36,6 +36,12 @@ export default () => ({
     .map((o) => o.trim())
     .filter(Boolean),
 
+  // Rate limiting (configurable por entorno).
+  throttle: {
+    ttlMs: parseInt(process.env.THROTTLE_TTL_MS ?? '60000', 10),
+    limit: parseInt(process.env.THROTTLE_LIMIT ?? '100', 10),
+  },
+
   // Validador de contribuyentes del SENIAT (RN-101).
   seniat: {
     validadorUrl:
@@ -44,5 +50,13 @@ export default () => ({
     timeoutMs: parseInt(process.env.SENIAT_TIMEOUT_MS ?? '8000', 10),
     // En dev evitamos golpear la API real del gobierno.
     mock: (process.env.SENIAT_MOCK ?? 'true').toLowerCase() === 'true',
+  },
+
+  // Imprenta Digital homologada (RN-007/120). Contrato real pendiente (URL/auth/respuesta).
+  imprenta: {
+    baseUrl: process.env.IMPRENTA_BASE_URL ?? '',
+    timeoutMs: parseInt(process.env.IMPRENTA_TIMEOUT_MS ?? '10000', 10),
+    // En dev no existe el endpoint real: se simula la asignación de número de control.
+    mock: (process.env.IMPRENTA_MOCK ?? 'true').toLowerCase() === 'true',
   },
 });

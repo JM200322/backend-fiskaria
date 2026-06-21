@@ -111,12 +111,23 @@ CORS_ORIGINS=http://localhost:3001,http://localhost:5173
 
 ## 6. Notas de desarrollo
 
-- **Validación SENIAT en modo mock**: en local, `SENIAT_MOCK=true` evita golpear la API real
-  del gobierno. En mock, un RIF que contenga `404` simula "no encontrado", `503` simula
-  "servicio caído", y `777` simula contribuyente "Especial"; cualquier otro RIF válido se da
-  por validado.
-- **La factura/imprenta aún no está implementada** (ver `ESTADO-BACKEND.md`).
-- Los montos de dinero se devuelven como string con 2 decimales (ej. `"19011.71"`).
+- **Validación SENIAT en modo mock** (`SENIAT_MOCK=true`): evita golpear la API real del
+  gobierno. En mock, un RIF que contenga `404` simula "no encontrado", `503` simula "servicio
+  caído", y `777` simula contribuyente "Especial"; cualquier otro RIF válido se da por validado.
+- **Imprenta Digital en modo mock** (`IMPRENTA_MOCK=true`): simula el número de control sin
+  llamar a la imprenta real (cuyo contrato aún está incompleto). Para probar el camino
+  "no enviado", un RIF de cliente/proveedor que contenga `999` hace fallar la imprenta.
+- **Datos del seed**: además de los usuarios y roles, crea un **comercio demo** (RIF
+  `J-00000000-0`), un **punto de emisión** (`01`) y un catálogo de **categorías fiscales**
+  (16% / 8% / 31% / Exento / Exonerado). Ya puedes facturar contra ese comercio.
+- **Montos**: el dinero se devuelve como string con 2 decimales (ej. `"19011.71"`); la factura
+  siempre va en bolívares.
+- **Rate limiting**: configurable con `THROTTLE_LIMIT` (peticiones/min por IP); en dev viene alto.
+- **Clave temporal (RN-014)**: al crear un usuario (`POST /api/usuarios`) o al recuperar
+  acceso (`POST /api/auth/recuperar`), se genera una **clave temporal** y el usuario queda con
+  `passwordTemporal: true` (visible en el login y en `/auth/me`). El frontend debe **forzar el
+  cambio** vía `POST /api/auth/cambiar-password`. Aún no hay SMTP: en dev la clave se devuelve
+  en la respuesta para poder probar el flujo.
 
 ---
 

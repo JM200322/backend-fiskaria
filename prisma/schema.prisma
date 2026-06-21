@@ -47,6 +47,12 @@ model Contribuyente {
   productos            Producto[]
   categoriasComerciales CategoriaComercial[]
   puntosEmision        PuntoEmision[]
+  documentos           DocumentoFiscal[]
+  compras              Compra[]
+  retenciones          ComprobanteRetencion[]
+  planCuentas          PlanCuenta[]
+  configsContables     ConfigCuentaContable[]
+  asientos             Asiento[]
   auditoria            RegistroAuditoria[]
   createdAt            DateTime             @default(now()) @map("created_at")
   updatedAt            DateTime             @updatedAt @map("updated_at")
@@ -74,6 +80,9 @@ model Tercero {
   rifValidado     Boolean             @default(false) @map("rif_validado") // requerido para facturar (RN-008)
   activo          Boolean             @default(true)
   productos       ProductoProveedor[]
+  documentosCliente DocumentoFiscal[] @relation("ClienteDocumentos")
+  comprasProveedor  Compra[]          @relation("ProveedorCompras")
+  retencionesBenef  ComprobanteRetencion[] @relation("BeneficiarioRetenciones")
   createdAt       DateTime            @default(now()) @map("created_at")
   updatedAt       DateTime            @updatedAt @map("updated_at")
   deletedAt       DateTime?           @map("deleted_at")
@@ -134,6 +143,7 @@ model Producto {
   stockMinimo         Decimal             @default(0) @map("stock_minimo") @db.Decimal(18, 3) // umbral de alerta
   activo              Boolean             @default(true)
   proveedores         ProductoProveedor[]
+  documentoItems      DocumentoItem[]
   createdAt           DateTime            @default(now()) @map("created_at")
   updatedAt           DateTime            @updatedAt @map("updated_at")
   deletedAt           DateTime?           @map("deleted_at")
@@ -176,6 +186,7 @@ model PuntoEmision {
   nombre          String
   activo          Boolean              @default(true)
   secuencias      SecuenciaDocumento[]
+  documentos      DocumentoFiscal[]
   createdAt       DateTime             @default(now()) @map("created_at")
   updatedAt       DateTime             @updatedAt @map("updated_at")
 
@@ -195,6 +206,255 @@ model SecuenciaDocumento {
 
   @@unique([puntoEmisionId, tipo])
   @@map("secuencias_documento")
+}
+
+// ──────────────────────────────────────────────────────────────
+// Facturador — documentos fiscales (Módulo 02) — RN-001/006/007/008/009/010/120/128
+// ──────────────────────────────────────────────────────────────
+
+enum EstatusDocumento {
+  NO_ENVIADO // creado, sin número de control de la imprenta (RN-112)
+  ENVIADO // emitido, con número de control
+  ANULADO_POR_REVERSO // corregido vía NC/ND (RN-002)
+  CONTINGENCIA
+}
+
+enum MetodoPago {
+  EFECTIVO_BS
+  DIVISAS
+  PAGO_MOVIL
+  TARJETA
+}
+
+/// Documento fiscal (Factura, NC, ND, Guía…). Append-only: no se edita ni borra (RN-001).
+model DocumentoFiscal {
+  id              String           @id @default(uuid())
+  contribuyenteId String           @map("contribuyente_id")
+  contribuyente   Contribuyente    @relation(fields: [contribuyenteId], references: [id])
+  puntoEmisionId  String           @map("punto_emision_id")
+  puntoEmision    PuntoEmision     @relation(fields: [puntoEmisionId], references: [id])
+  tipo            TipoDocumento
+  docNum          String           @map("doc_num") // correlativo interno (Fiskaria)
+  numeroControl   String?          @map("numero_control") // lo asigna la imprenta (RN-007)
+  estatus         EstatusDocumento @default(NO_ENVIADO)
+  clienteTerceroId String          @map("cliente_tercero_id")
+  cliente         Tercero          @relation("ClienteDocumentos", fields: [clienteTerceroId], references: [id])
+  documentoOrigenId String?        @map("documento_origen_id")
+  documentoOrigen DocumentoFiscal? @relation("Reverso", fields: [documentoOrigenId], references: [id])
+  reversos        DocumentoFiscal[] @relation("Reverso")
+  reasonTo        String?          @map("reason_to")
+  fecha           DateTime         @db.Date
+  hora            String // HH:MM:SS
+  paymentMethod   String           @map("payment_method")
+  currency        String           @default("VES")
+  subtotal        Decimal          @db.Decimal(18, 2)
+  totalTax        Decimal          @map("total_tax") @db.Decimal(18, 2)
+  totalWTaxes     Decimal          @map("total_w_taxes") @db.Decimal(18, 2)
+  igtf            Decimal          @default(0) @db.Decimal(18, 2)
+  tasaBcv         Decimal          @map("tasa_bcv") @db.Decimal(18, 6) // tasa usada (RN-118)
+  tasaMoneda      String           @default("USD") @map("tasa_moneda")
+  desgloseIva     Json             @map("desglose_iva")
+  thirdParty      Json?            @map("third_party")
+  items           DocumentoItem[]
+  pagos           PagoDocumento[]
+  createdAt       DateTime         @default(now()) @map("created_at")
+
+  @@unique([contribuyenteId, tipo, puntoEmisionId, docNum]) // RN-128
+  @@index([contribuyenteId])
+  @@index([clienteTerceroId])
+  @@map("documentos_fiscales")
+}
+
+model DocumentoItem {
+  id            String          @id @default(uuid())
+  documentoId   String          @map("documento_id")
+  documento     DocumentoFiscal @relation(fields: [documentoId], references: [id], onDelete: Cascade)
+  productoId    String?         @map("producto_id")
+  producto      Producto?       @relation(fields: [productoId], references: [id])
+  tipoLinea     String          @default("item") @map("tipo_linea")
+  descripcion   String
+  codigo        String
+  cantidad      Decimal         @db.Decimal(18, 3)
+  costoUnit     Decimal         @map("costo_unit") @db.Decimal(18, 2)
+  costoTotal    Decimal         @map("costo_total") @db.Decimal(18, 2)
+  taxElm        String          @map("tax_elm") // G / E
+  taxPercentage String          @map("tax_percentage") // "16%"
+
+  @@index([documentoId])
+  @@map("documento_items")
+}
+
+model PagoDocumento {
+  id          String          @id @default(uuid())
+  documentoId String          @map("documento_id")
+  documento   DocumentoFiscal @relation(fields: [documentoId], references: [id], onDelete: Cascade)
+  metodo      MetodoPago
+  monto       Decimal         @db.Decimal(18, 2)
+  esDivisa    Boolean         @default(false) @map("es_divisa") // activa IGTF (RN-010)
+  referencia  String?
+  banco       String?
+  lotePos     String?         @map("lote_pos")
+
+  @@index([documentoId])
+  @@map("pagos_documento")
+}
+
+// ──────────────────────────────────────────────────────────────
+// Compras y Retenciones — Módulo 04 — RN-011/104/127/129/132
+// ──────────────────────────────────────────────────────────────
+
+enum EstatusCompra {
+  REGISTRADA
+  PAGADA_PARCIAL
+  PAGADA_TOTAL
+}
+
+enum TipoRetencion {
+  IVA
+  ISLR
+}
+
+/// Factura de compra registrada a un proveedor (genera IVA crédito, RN-011).
+model Compra {
+  id                 String                 @id @default(uuid())
+  contribuyenteId    String                 @map("contribuyente_id")
+  contribuyente      Contribuyente          @relation(fields: [contribuyenteId], references: [id])
+  proveedorTerceroId String                 @map("proveedor_tercero_id")
+  proveedor          Tercero                @relation("ProveedorCompras", fields: [proveedorTerceroId], references: [id])
+  numeroFactura      String                 @map("numero_factura") // doc del proveedor
+  numeroControl      String?                @map("numero_control") // control fiscal del proveedor (para retención, RN-127)
+  fecha              DateTime               @db.Date
+  base               Decimal                @db.Decimal(18, 2) // base imponible
+  ivaCredito         Decimal                @map("iva_credito") @db.Decimal(18, 2)
+  total              Decimal                @db.Decimal(18, 2)
+  estado             EstatusCompra          @default(REGISTRADA)
+  pagos              PagoProveedor[]
+  retenciones        ComprobanteRetencion[]
+  createdAt          DateTime               @default(now()) @map("created_at")
+  updatedAt          DateTime               @updatedAt @map("updated_at")
+
+  @@index([contribuyenteId])
+  @@map("compras")
+}
+
+model PagoProveedor {
+  id         String   @id @default(uuid())
+  compraId   String   @map("compra_id")
+  compra     Compra   @relation(fields: [compraId], references: [id], onDelete: Cascade)
+  monto      Decimal  @db.Decimal(18, 2)
+  referencia String?
+  fecha      DateTime @db.Date
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  @@index([compraId])
+  @@map("pagos_proveedor")
+}
+
+/// Comprobante de Retención (IVA/ISLR) emitido por la imprenta. Inmutable (RN-132).
+model ComprobanteRetencion {
+  id                   String           @id @default(uuid())
+  contribuyenteId      String           @map("contribuyente_id")
+  contribuyente        Contribuyente    @relation(fields: [contribuyenteId], references: [id])
+  compraId             String?          @map("compra_id")
+  compra               Compra?          @relation(fields: [compraId], references: [id])
+  tipo                 TipoRetencion
+  docNum               String           @map("doc_num")
+  numeroControl        String?          @map("numero_control") // lo asigna la imprenta
+  estatus              EstatusDocumento @default(NO_ENVIADO)
+  periodoYear          String           @map("periodo_year")
+  periodoMonth         String           @map("periodo_month")
+  beneficiarioTerceroId String          @map("beneficiario_tercero_id")
+  beneficiario         Tercero          @relation("BeneficiarioRetenciones", fields: [beneficiarioTerceroId], references: [id])
+  facDocumentNum       String           @map("fac_document_num") // factura referenciada (RN-127)
+  facControlNum        String           @map("fac_control_num")
+  base                 Decimal          @db.Decimal(18, 2)
+  porcentaje           Decimal          @db.Decimal(5, 2)
+  montoRetenido        Decimal          @map("monto_retenido") @db.Decimal(18, 2)
+  conceptoIslr         String?          @map("concepto_islr") // solo ISLR
+  fecha                DateTime         @db.Date
+  hora                 String
+  createdAt            DateTime         @default(now()) @map("created_at")
+
+  @@unique([contribuyenteId, tipo, docNum])
+  @@index([contribuyenteId])
+  @@map("comprobantes_retencion")
+}
+
+// ──────────────────────────────────────────────────────────────
+// Contabilidad — Módulo 07 — RN-105/107/135
+// ──────────────────────────────────────────────────────────────
+
+enum TipoCuenta {
+  ACTIVO
+  PASIVO
+  PATRIMONIO
+  INGRESO
+  GASTO
+}
+
+enum OrigenAsiento {
+  AUTOMATICO
+  MANUAL
+}
+
+/// Plan de cuentas por comercio. Sin precarga: cada uno lo crea desde cero (RN-135).
+model PlanCuenta {
+  id              String                 @id @default(uuid())
+  contribuyenteId String                 @map("contribuyente_id")
+  contribuyente   Contribuyente          @relation(fields: [contribuyenteId], references: [id])
+  codigo          String
+  nombre          String
+  tipo            TipoCuenta
+  activa          Boolean                @default(true)
+  lineas          AsientoLinea[]
+  configs         ConfigCuentaContable[]
+  createdAt       DateTime               @default(now()) @map("created_at")
+
+  @@unique([contribuyenteId, codigo])
+  @@index([contribuyenteId])
+  @@map("plan_cuentas")
+}
+
+/// Mapeo "evento contable → cuenta" para los asientos automáticos (RN-135/107).
+model ConfigCuentaContable {
+  id              String        @id @default(uuid())
+  contribuyenteId String        @map("contribuyente_id")
+  contribuyente   Contribuyente @relation(fields: [contribuyenteId], references: [id])
+  evento          String // ej. venta_ingreso, iva_debito, igtf, retencion_iva...
+  cuentaId        String        @map("cuenta_id")
+  cuenta          PlanCuenta    @relation(fields: [cuentaId], references: [id])
+
+  @@unique([contribuyenteId, evento])
+  @@map("config_cuentas_contables")
+}
+
+/// Asiento contable (automático o manual). Σ debe = Σ haber (partida doble).
+model Asiento {
+  id              String         @id @default(uuid())
+  contribuyenteId String         @map("contribuyente_id")
+  contribuyente   Contribuyente  @relation(fields: [contribuyenteId], references: [id])
+  fecha           DateTime       @db.Date
+  glosa           String
+  origen          OrigenAsiento  @default(MANUAL)
+  documentoRef    String?        @map("documento_ref")
+  lineas          AsientoLinea[]
+  createdAt       DateTime       @default(now()) @map("created_at")
+
+  @@index([contribuyenteId])
+  @@map("asientos")
+}
+
+model AsientoLinea {
+  id        String     @id @default(uuid())
+  asientoId String     @map("asiento_id")
+  asiento   Asiento    @relation(fields: [asientoId], references: [id], onDelete: Cascade)
+  cuentaId  String     @map("cuenta_id")
+  cuenta    PlanCuenta @relation(fields: [cuentaId], references: [id])
+  debe      Decimal    @default(0) @db.Decimal(18, 2)
+  haber     Decimal    @default(0) @db.Decimal(18, 2)
+
+  @@index([asientoId])
+  @@map("asiento_lineas")
 }
 
 // ──────────────────────────────────────────────────────────────

@@ -1,0 +1,421 @@
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+  UnprocessableEntityException,
+} from '@nestjs/common';
+import { EstatusDocumento, MetodoPago, Prisma, TipoDocumento } from '@prisma/client';
+import Decimal from 'decimal.js';
+import {
+  calcularBaseLinea,
+  calcularDocumento,
+  calcularIgtf,
+  redondear,
+} from 'src/common/fiscal/calculo-fiscal';
+import { PrismaService } from 'src/prisma/prisma.service';
+import { AuditoriaService } from '../auditoria/auditoria.service';
+import { AuthenticatedUser } from '../auth/types/authenticated-user';
+import { ImprentaService } from '../imprenta/imprenta.service';
+import { ImprentaError, ImprentaRespuesta } from '../imprenta/imprenta.types';
+import { construirPayloadFactura } from '../imprenta/mappers/factura.mapper';
+import {
+  construirPayloadNotaCredito,
+  construirPayloadNotaDebito,
+} from '../imprenta/mappers/nota.mapper';
+import { NumeracionService } from '../puntos-emision/numeracion.service';
+import { EmitirFacturaDto, ItemFacturaDto, MetodoPagoDto } from './dto/emitir-factura.dto';
+import { EmitirNotaDto } from './dto/emitir-nota.dto';
+
+const ETIQUETA_PAGO: Record<MetodoPagoDto, string> = {
+  EFECTIVO_BS: 'Efectivo Bs.',
+  DIVISAS: 'Divisas',
+  PAGO_MOVIL: 'Pago Móvil',
+  TARJETA: 'Tarjeta',
+};
+
+const incluir = { items: true, pagos: true, cliente: { select: { rif: true, nombre: true } } };
+
+@Injectable()
+export class FacturadorService {
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly numeracion: NumeracionService,
+    private readonly imprenta: ImprentaService,
+    private readonly auditoria: AuditoriaService,
+  ) {}
+
+  async emitirFactura(dto: EmitirFacturaDto, actor: AuthenticatedUser, ip?: string) {
+    const contribuyenteId = this.tenantId(actor);
+
+    // 1. Punto de emisión válido y del comercio.
+    const punto = await this.prisma.puntoEmision.findFirst({
+      where: { id: dto.puntoEmisionId, contribuyenteId },
+    });
+    if (!punto) throw new BadRequestException('Punto de emisión inválido');
+    if (!punto.activo) throw new BadRequestException('El punto de emisión está inactivo');
+
+    // 2. Cliente con RIF validado (F1 / RN-008).
+    const cliente = await this.prisma.tercero.findFirst({
+      where: { id: dto.clienteId, contribuyenteId, deletedAt: null },
+    });
+    if (!cliente || !cliente.esCliente) throw new NotFoundException('Cliente no encontrado');
+    if (!cliente.rifValidado) {
+      throw new UnprocessableEntityException('El cliente no tiene RIF validado (RN-008)');
+    }
+
+    // 3-4. Productos, construcción de líneas y cálculo fiscal.
+    const { lineas, calc } = await this.prepararLineas(dto.items, contribuyenteId);
+
+    // 5. Pagos e IGTF (RN-010). Los pagos deben cubrir el total (sin IGTF).
+    const sumaPagos = dto.pagos.reduce((acc, p) => acc.plus(p.monto), new Decimal(0));
+    if (!redondear(sumaPagos).equals(new Decimal(calc.total))) {
+      throw new BadRequestException(
+        `Los pagos (${redondear(sumaPagos).toFixed(2)}) no coinciden con el total (${calc.total})`,
+      );
+    }
+    const montoDivisas = dto.pagos
+      .filter((p) => p.esDivisa)
+      .reduce((acc, p) => acc.plus(p.monto), new Decimal(0));
+    const igtf = montoDivisas.gt(0) ? calcularIgtf(montoDivisas) : '0.00';
+    const paymentMethod =
+      dto.pagos.length === 1
+        ? ETIQUETA_PAGO[dto.pagos[0].metodo]
+        : 'Mixto';
+
+    const ahora = new Date();
+    const hora = ahora.toISOString().slice(11, 19); // HH:MM:SS
+
+    // 6. Transacción atómica: numeración + documento + descuento de stock (RN-006/121).
+    const creado = await this.prisma.$transaction(async (tx) => {
+      const { docNum } = await this.numeracion.siguiente(punto.id, TipoDocumento.FACTURA, tx);
+
+      const doc = await tx.documentoFiscal.create({
+        data: {
+          contribuyenteId,
+          puntoEmisionId: punto.id,
+          tipo: TipoDocumento.FACTURA,
+          docNum,
+          estatus: EstatusDocumento.NO_ENVIADO,
+          clienteTerceroId: cliente.id,
+          fecha: ahora,
+          hora,
+          paymentMethod,
+          subtotal: calc.subtotal,
+          totalTax: calc.totalIva,
+          totalWTaxes: calc.total,
+          igtf,
+          tasaBcv: dto.tasaBcv,
+          desgloseIva: calc.desglose as unknown as Prisma.InputJsonValue,
+          items: {
+            create: lineas.map((l) => ({
+              productoId: l.producto.id,
+              descripcion: l.producto.nombre,
+              codigo: l.producto.codigo,
+              cantidad: l.cantidad,
+              costoUnit: l.costoUnit.toFixed(2),
+              costoTotal: l.costoTotal.toFixed(2),
+              taxElm: l.alicuota.gt(0) ? 'G' : 'E',
+              taxPercentage: `${l.alicuota.toString()}%`,
+            })),
+          },
+          pagos: {
+            create: dto.pagos.map((p) => ({
+              metodo: p.metodo as MetodoPago,
+              monto: p.monto,
+              esDivisa: p.esDivisa ?? false,
+              referencia: p.referencia,
+              banco: p.banco,
+              lotePos: p.lotePos,
+            })),
+          },
+        },
+        include: incluir,
+      });
+
+      // Descuento de stock solo para almacenables (RN-121 / F16).
+      for (const l of lineas) {
+        if (l.producto.tipo === 'ALMACENABLE') {
+          await tx.producto.update({
+            where: { id: l.producto.id },
+            data: { stock: { decrement: l.cantidad } },
+          });
+        }
+      }
+      return doc;
+    });
+
+    // 7. Transmisión a la Imprenta Digital (fuera de la transacción para no retener locks).
+    return this.transmitir(creado.id, actor, ip);
+  }
+
+  /** Emite una Nota de Crédito (devolución/descuento) sobre una factura. */
+  emitirNotaCredito(dto: EmitirNotaDto, actor: AuthenticatedUser, ip?: string) {
+    return this.emitirNota(TipoDocumento.NOTA_CREDITO, dto, actor, ip);
+  }
+
+  /** Emite una Nota de Débito (cargo adicional) sobre una factura. */
+  emitirNotaDebito(dto: EmitirNotaDto, actor: AuthenticatedUser, ip?: string) {
+    return this.emitirNota(TipoDocumento.NOTA_DEBITO, dto, actor, ip);
+  }
+
+  /** Lógica común de NC/ND: referencia a factura, numeración propia, stock (NC), transmisión. */
+  private async emitirNota(
+    tipo: TipoDocumento, // NOTA_CREDITO | NOTA_DEBITO
+    dto: EmitirNotaDto,
+    actor: AuthenticatedUser,
+    ip?: string,
+  ) {
+    const contribuyenteId = this.tenantId(actor);
+
+    // Factura origen: debe existir, ser del comercio y estar emitida (RN-002, tener control).
+    const factura = await this.prisma.documentoFiscal.findFirst({
+      where: { id: dto.facturaOrigenId, contribuyenteId, tipo: TipoDocumento.FACTURA },
+    });
+    if (!factura) throw new NotFoundException('Factura origen no encontrada');
+    if (factura.estatus !== EstatusDocumento.ENVIADO) {
+      throw new BadRequestException(
+        'La factura debe estar emitida (con número de control) para emitir una nota',
+      );
+    }
+
+    const { lineas, calc } = await this.prepararLineas(dto.items, contribuyenteId);
+    const ahora = new Date();
+    const hora = ahora.toISOString().slice(11, 19);
+
+    const creado = await this.prisma.$transaction(async (tx) => {
+      const { docNum } = await this.numeracion.siguiente(factura.puntoEmisionId, tipo, tx);
+      const doc = await tx.documentoFiscal.create({
+        data: {
+          contribuyenteId,
+          puntoEmisionId: factura.puntoEmisionId,
+          tipo,
+          docNum,
+          estatus: EstatusDocumento.NO_ENVIADO,
+          clienteTerceroId: factura.clienteTerceroId,
+          documentoOrigenId: factura.id, // trazabilidad (RN-002)
+          reasonTo: dto.motivo,
+          fecha: ahora,
+          hora,
+          paymentMethod: factura.paymentMethod,
+          subtotal: calc.subtotal,
+          totalTax: calc.totalIva,
+          totalWTaxes: calc.total,
+          igtf: '0.00', // las NC/ND no agregan IGTF (decisión a confirmar)
+          tasaBcv: factura.tasaBcv,
+          desgloseIva: calc.desglose as unknown as Prisma.InputJsonValue,
+          items: {
+            create: lineas.map((l) => ({
+              productoId: l.producto.id,
+              descripcion: l.producto.nombre,
+              codigo: l.producto.codigo,
+              cantidad: l.cantidad,
+              costoUnit: l.costoUnit.toFixed(2),
+              costoTotal: l.costoTotal.toFixed(2),
+              taxElm: l.alicuota.gt(0) ? 'G' : 'E',
+              taxPercentage: `${l.alicuota.toString()}%`,
+            })),
+          },
+        },
+      });
+
+      // La Nota de Crédito por devolución reingresa stock (almacenables). La ND no mueve stock.
+      if (tipo === TipoDocumento.NOTA_CREDITO) {
+        for (const l of lineas) {
+          if (l.producto.tipo === 'ALMACENABLE') {
+            await tx.producto.update({
+              where: { id: l.producto.id },
+              data: { stock: { increment: l.cantidad } },
+            });
+          }
+        }
+      }
+      return doc;
+    });
+
+    return this.transmitir(creado.id, actor, ip);
+  }
+
+  /** Reintenta la transmisión de un documento "No enviado" (RN-112). */
+  async reintentar(id: string, actor: AuthenticatedUser, ip?: string) {
+    const contribuyenteId = this.tenantId(actor);
+    const doc = await this.prisma.documentoFiscal.findFirst({
+      where: { id, contribuyenteId },
+      include: { cliente: true },
+    });
+    if (!doc) throw new NotFoundException('Documento no encontrado');
+    if (doc.estatus !== EstatusDocumento.NO_ENVIADO) {
+      throw new BadRequestException('El documento no está en estatus "No enviado"');
+    }
+    return this.transmitir(doc.id, actor, ip, true);
+  }
+
+  async listar(actor: AuthenticatedUser, opts: { tipo?: TipoDocumento; estatus?: EstatusDocumento } = {}) {
+    const contribuyenteId = this.tenantId(actor);
+    return this.prisma.documentoFiscal.findMany({
+      where: { contribuyenteId, tipo: opts.tipo, estatus: opts.estatus },
+      orderBy: { createdAt: 'desc' },
+      take: 100,
+    });
+  }
+
+  async obtener(id: string, actor: AuthenticatedUser) {
+    const contribuyenteId = this.tenantId(actor);
+    const doc = await this.prisma.documentoFiscal.findFirst({
+      where: { id, contribuyenteId },
+      include: incluir,
+    });
+    if (!doc) throw new NotFoundException('Documento no encontrado');
+    return doc;
+  }
+
+  /** Productos → líneas (con alícuota por categoría fiscal/override) + cálculo fiscal. */
+  private async prepararLineas(items: ItemFacturaDto[], contribuyenteId: string) {
+    const productos = await this.prisma.producto.findMany({
+      where: { id: { in: items.map((i) => i.productoId) }, contribuyenteId, deletedAt: null },
+      include: { categoriaFiscal: true },
+    });
+    const mapaProd = new Map(productos.map((p) => [p.id, p]));
+    const lineas = items.map((item) => {
+      const prod = mapaProd.get(item.productoId);
+      if (!prod) throw new BadRequestException(`Producto inválido: ${item.productoId}`);
+      const alicuota = new Decimal(prod.ivaOverride ?? prod.categoriaFiscal.alicuotaIva); // RN-102
+      return {
+        producto: prod,
+        cantidad: item.cantidad,
+        alicuota,
+        costoUnit: redondear(prod.precio),
+        costoTotal: calcularBaseLinea(item.cantidad, prod.precio),
+      };
+    });
+    const calc = calcularDocumento(
+      lineas.map((l) => ({ cantidad: l.cantidad, precioUnitario: l.costoUnit, alicuota: l.alicuota })),
+    );
+    return { lineas, calc };
+  }
+
+  /**
+   * Construye el payload según el tipo, llama a la imprenta y actualiza estatus/numeroControl.
+   * Sirve para Factura, Nota de Crédito y Nota de Débito (y para reintentos).
+   */
+  private async transmitir(docId: string, actor: AuthenticatedUser, ip?: string, esReintento = false) {
+    const doc = await this.prisma.documentoFiscal.findUniqueOrThrow({
+      where: { id: docId },
+      include: {
+        items: true,
+        pagos: true,
+        cliente: true,
+        documentoOrigen: { select: { docNum: true, numeroControl: true } },
+      },
+    });
+
+    const cliente = {
+      nombre: doc.cliente.nombre,
+      tipoId: doc.cliente.tipoId,
+      idNum: doc.cliente.rif.slice(1),
+      direccion: doc.cliente.direccion,
+      telefono: doc.cliente.telefono,
+      email: doc.cliente.email,
+    };
+    const items = doc.items.map((it) => ({
+      descripcion: it.descripcion,
+      codigo: it.codigo,
+      cantidad: Number(it.cantidad),
+      costoUnit: Number(it.costoUnit),
+      costoTotal: Number(it.costoTotal),
+      taxElm: it.taxElm,
+      taxPercentage: it.taxPercentage,
+    }));
+    const totales = {
+      subtotal: Number(doc.subtotal),
+      totalTax: Number(doc.totalTax),
+      totalWTaxes: Number(doc.totalWTaxes),
+      igtf: Number(doc.igtf),
+      tasaBcv: Number(doc.tasaBcv),
+    };
+    const accionBase =
+      doc.tipo === TipoDocumento.NOTA_CREDITO
+        ? 'nota_credito'
+        : doc.tipo === TipoDocumento.NOTA_DEBITO
+          ? 'nota_debito'
+          : 'factura';
+
+    try {
+      let resp: ImprentaRespuesta;
+      if (doc.tipo === TipoDocumento.FACTURA) {
+        resp = await this.imprenta.generarFactura(
+          construirPayloadFactura({
+            docNum: doc.docNum,
+            cliente,
+            fecha: doc.fecha,
+            hora: doc.hora,
+            paymentMethod: doc.paymentMethod,
+            notificarCliente: true,
+            ...totales,
+            items,
+          }),
+        );
+      } else {
+        const datosNota = {
+          docNum: doc.docNum,
+          cliente,
+          fecha: doc.fecha,
+          hora: doc.hora,
+          motivo: doc.reasonTo ?? '',
+          facturaDocNum: doc.documentoOrigen?.docNum ?? '',
+          facturaNumeroControl: doc.documentoOrigen?.numeroControl ?? null,
+          paymentMethod: doc.paymentMethod,
+          ...totales,
+          items,
+        };
+        resp =
+          doc.tipo === TipoDocumento.NOTA_CREDITO
+            ? await this.imprenta.generarNotaCredito(construirPayloadNotaCredito(datosNota))
+            : await this.imprenta.generarNotaDebito(construirPayloadNotaDebito(datosNota));
+      }
+
+      const actualizado = await this.prisma.documentoFiscal.update({
+        where: { id: docId },
+        data: { numeroControl: resp.numeroControl, estatus: EstatusDocumento.ENVIADO },
+        include: incluir,
+      });
+      await this.audit(actor, ip, `${esReintento ? 'reintentar' : 'emitir'}_${accionBase}`, docId, {
+        docNum: doc.docNum,
+        numeroControl: resp.numeroControl,
+      });
+      return actualizado;
+    } catch (e) {
+      if (!(e instanceof ImprentaError)) throw e;
+      // RN-112: la imprenta falló → el documento queda "No enviado" (no se pierde).
+      await this.audit(actor, ip, `emitir_${accionBase}_no_enviado`, docId, {
+        docNum: doc.docNum,
+        error: e.message,
+      });
+      return this.prisma.documentoFiscal.findUniqueOrThrow({ where: { id: docId }, include: incluir });
+    }
+  }
+
+  private tenantId(actor: AuthenticatedUser): string {
+    if (!actor.contribuyenteId) {
+      throw new BadRequestException('La emisión requiere contexto de comercio');
+    }
+    return actor.contribuyenteId;
+  }
+
+  private audit(
+    actor: AuthenticatedUser,
+    ip: string | undefined,
+    accion: string,
+    entidadId: string,
+    detalle?: Prisma.InputJsonValue,
+  ) {
+    return this.auditoria.registrar({
+      usuarioId: actor.id,
+      contribuyenteId: actor.contribuyenteId,
+      ip,
+      accion,
+      entidad: 'documento_fiscal',
+      entidadId,
+      detalle,
+    });
+  }
+}

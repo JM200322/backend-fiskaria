@@ -5,6 +5,7 @@ import { CurrentUser } from './decorators/current-user.decorator';
 import { Public } from './decorators/public.decorator';
 import { CambiarPasswordDto } from './dto/cambiar-password.dto';
 import { LoginDto } from './dto/login.dto';
+import { RecuperarDto } from './dto/recuperar.dto';
 import { RefreshDto } from './dto/refresh.dto';
 import { AuthenticatedUser } from './types/authenticated-user';
 
@@ -27,6 +28,14 @@ export class AuthController {
   @ApiOperation({ summary: 'Renovar el access token usando el refresh token' })
   refresh(@Body() dto: RefreshDto) {
     return this.authService.refresh(dto.refreshToken);
+  }
+
+  @Public()
+  @Post('recuperar')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Recuperar acceso: envía una clave temporal (RN-014)' })
+  recuperar(@Body() dto: RecuperarDto, @Ip() ip: string) {
+    return this.authService.recuperar(dto.email, ip);
   }
 
   @Post('logout')
