@@ -11,9 +11,9 @@ Qué está **listo para integrar** y qué **falta**, mapeado contra los **11 mó
 
 ## Resumen
 
-- ✅ **Listos: 7 módulos completos** + **2 parciales** (con su parte central ya usable).
-- ❌ **Faltan: 3 módulos** (Ventas, SENIAT/Cumplimiento, Municipales) + el panel de Imprenta.
-- Avance estimado: **~80%**.
+- ✅ **Listos: 9 módulos completos** + **2 parciales** (con su parte central ya usable).
+- ❌ **Falta: 1 módulo** (SENIAT/Cumplimiento) + el panel de Imprenta.
+- Avance estimado: **~88%**.
 
 | # | Módulo (SDD) | Estado |
 |---|---|---|
@@ -22,14 +22,14 @@ Qué está **listo para integrar** y qué **falta**, mapeado contra los **11 mó
 | 6 | Clientes / Terceros | ✅ Listo |
 | 5 | Inventario / Productos | ✅ Listo |
 | 4 | Compras y Retenciones | ✅ Listo (falta retenciones *recibidas*) |
+| 3 | Ventas | ✅ Listo |
+| 9 | Impuestos municipales | ✅ Listo |
 | 1 | Dashboard | ✅ Listo |
 | 11 | Usuarios / Roles / Auditoría | ✅ Listo (falta envío SMTP de clave temporal) |
 | 2 | Facturador | 🟡 Parcial — Factura + NC/ND ✅ (falta guía despacho, contingencia, PDF) |
 | 7 | Contabilidad | 🟡 Parcial — plan de cuentas, asientos y libros ✅ (falta posteo automático y TXT/XML) |
 | 10 | Imprenta Digital | 🟡 Integración interna ✅ (modo mock); falta el panel |
-| 3 | Ventas | ❌ Falta |
-| 8 | SENIAT / Cumplimiento (exportadores) | ❌ Falta |
-| 9 | Impuestos municipales | ❌ Falta |
+| 8 | SENIAT / Cumplimiento (exportadores) | ❌ Falta (formato TXT/XML pendiente) |
 
 ---
 
@@ -128,6 +128,26 @@ Todos bajo `http://localhost:3000/api`. Salvo los marcados *(público)*, requier
 | GET | `/libros/compras?year=&month=` | `contabilidad:ver` |
 | GET | `/declaraciones/iva?year=&month=` | `contabilidad:ver` |
 
+### Ventas (módulo 3) — ciclo comercial → factura
+| Método | Ruta | Permiso |
+|---|---|---|
+| POST | `/ventas` | `ventas:crear` (cotización) |
+| GET | `/ventas?estado=` · `/ventas/:id` | `ventas:ver` |
+| POST | `/ventas/:id/confirmar` | `ventas:crear` |
+| POST | `/ventas/:id/anular` | `ventas:anular` |
+| POST | `/ventas/:id/facturar` | `facturas:crear` (convierte en factura) |
+
+> Una cotización **no** genera documento fiscal ni descuenta stock; eso ocurre al **facturar**.
+
+### Impuestos Municipales (módulo 9)
+| Método | Ruta | Permiso |
+|---|---|---|
+| POST | `/actividades-economicas` | `municipales:crear` |
+| GET | `/actividades-economicas` | `municipales:ver` |
+| POST | `/impuestos-municipales` | `municipales:crear` (calcula base × alícuota) |
+| GET | `/impuestos-municipales?estado=` | `municipales:ver` |
+| POST | `/impuestos-municipales/:id/pagar` | `municipales:pagar` |
+
 ### Dashboard (módulo 1)
 | Método | Ruta | Permiso |
 |---|---|---|
@@ -150,9 +170,7 @@ Todos bajo `http://localhost:3000/api`. Salvo los marcados *(público)*, requier
 
 | Módulo | Qué incluirá |
 |---|---|
-| **3 · Ventas** | Cotizaciones / ventas que derivan en factura |
-| **8 · SENIAT / Cumplimiento** | Exportadores de libros legales, declaraciones, carpeta de inspección |
-| **9 · Impuestos municipales** | Actividades económicas, cálculo y pagos |
+| **8 · SENIAT / Cumplimiento** | Exportadores de libros legales, declaraciones, carpeta de inspección (formato TXT/XML pendiente del revisor fiscal) |
 | **10 · Imprenta (panel)** | Pantalla de estado de transmisiones / documentos "no enviado" |
 | **2 · Facturador (resto)** | Guía de despacho, factura en contingencia, PDF protegido |
 | **4 · Compras (resto)** | Retenciones *recibidas* (las que practican los clientes) |

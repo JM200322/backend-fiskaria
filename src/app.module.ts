@@ -13,6 +13,7 @@ import { ComprasModule } from './modules/compras/compras.module';
 import { ContabilidadModule } from './modules/contabilidad/contabilidad.module';
 import { ContribuyentesModule } from './modules/contribuyentes/contribuyentes.module';
 import { DashboardModule } from './modules/dashboard/dashboard.module';
+import { MunicipalesModule } from './modules/municipales/municipales.module';
 import { FacturadorModule } from './modules/facturador/facturador.module';
 import { HealthModule } from './modules/health/health.module';
 import { ImprentaModule } from './modules/imprenta/imprenta.module';
@@ -21,6 +22,7 @@ import { PuntosEmisionModule } from './modules/puntos-emision/puntos-emision.mod
 import { SeniatModule } from './modules/seniat/seniat.module';
 import { TercerosModule } from './modules/terceros/terceros.module';
 import { UsuariosModule } from './modules/usuarios/usuarios.module';
+import { VentasModule } from './modules/ventas/ventas.module';
 
 @Module({
   imports: [
@@ -56,9 +58,11 @@ import { UsuariosModule } from './modules/usuarios/usuarios.module';
     ProductosModule,
     PuntosEmisionModule,
     FacturadorModule,
+    VentasModule,
     ComprasModule,
     ContabilidadModule,
     DashboardModule,
+    MunicipalesModule,
     HealthModule,
     // A medida que avancen las épicas se agregan aquí:
     // ClientesModule, ProveedoresModule, ProductosModule,

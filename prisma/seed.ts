@@ -19,7 +19,7 @@ const PERMISOS: Record<string, string[]> = {
   terceros: ['ver', 'crear', 'editar', 'eliminar'], // clientes/proveedores (RN-104)
   contabilidad: ['ver', 'crear', 'cerrar_periodo'],
   seniat: ['ver', 'declarar'],
-  municipales: ['ver', 'pagar'],
+  municipales: ['ver', 'crear', 'pagar'],
   reportes: ['ver'],
   usuarios: ['ver', 'crear', 'editar', 'eliminar'],
   roles: ['ver', 'crear', 'editar', 'eliminar'],

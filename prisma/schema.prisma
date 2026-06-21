@@ -53,6 +53,9 @@ model Contribuyente {
   planCuentas          PlanCuenta[]
   configsContables     ConfigCuentaContable[]
   asientos             Asiento[]
+  ventas               Venta[]
+  actividadesEconomicas ActividadEconomica[]
+  impuestosMunicipales ImpuestoMunicipal[]
   auditoria            RegistroAuditoria[]
   createdAt            DateTime             @default(now()) @map("created_at")
   updatedAt            DateTime             @updatedAt @map("updated_at")
@@ -83,6 +86,7 @@ model Tercero {
   documentosCliente DocumentoFiscal[] @relation("ClienteDocumentos")
   comprasProveedor  Compra[]          @relation("ProveedorCompras")
   retencionesBenef  ComprobanteRetencion[] @relation("BeneficiarioRetenciones")
+  ventas            Venta[]           @relation("VentasTercero")
   createdAt       DateTime            @default(now()) @map("created_at")
   updatedAt       DateTime            @updatedAt @map("updated_at")
   deletedAt       DateTime?           @map("deleted_at")
@@ -144,6 +148,7 @@ model Producto {
   activo              Boolean             @default(true)
   proveedores         ProductoProveedor[]
   documentoItems      DocumentoItem[]
+  ventaItems          VentaItem[]
   createdAt           DateTime            @default(now()) @map("created_at")
   updatedAt           DateTime            @updatedAt @map("updated_at")
   deletedAt           DateTime?           @map("deleted_at")
@@ -455,6 +460,94 @@ model AsientoLinea {
 
   @@index([asientoId])
   @@map("asiento_lineas")
+}
+
+// ──────────────────────────────────────────────────────────────
+// Ventas — Módulo 03 (ciclo comercial previo a la factura) — RN-103
+// ──────────────────────────────────────────────────────────────
+
+enum EstadoVenta {
+  COTIZACION
+  CONFIRMADA
+  FACTURADA
+  ANULADA
+}
+
+/// Venta/cotización: NO es documento fiscal (RN-103). Puede derivar en factura.
+model Venta {
+  id                String        @id @default(uuid())
+  contribuyenteId   String        @map("contribuyente_id")
+  contribuyente     Contribuyente @relation(fields: [contribuyenteId], references: [id])
+  terceroId         String        @map("tercero_id")
+  tercero           Tercero       @relation("VentasTercero", fields: [terceroId], references: [id])
+  estado            EstadoVenta   @default(COTIZACION)
+  totalEstimado     Decimal       @map("total_estimado") @db.Decimal(18, 2)
+  documentoFiscalId String?       @map("documento_fiscal_id") // factura generada (si se facturó)
+  items             VentaItem[]
+  createdAt         DateTime      @default(now()) @map("created_at")
+  updatedAt         DateTime      @updatedAt @map("updated_at")
+
+  @@index([contribuyenteId])
+  @@map("ventas")
+}
+
+model VentaItem {
+  id          String   @id @default(uuid())
+  ventaId     String   @map("venta_id")
+  venta       Venta    @relation(fields: [ventaId], references: [id], onDelete: Cascade)
+  productoId  String   @map("producto_id")
+  producto    Producto @relation(fields: [productoId], references: [id])
+  descripcion String
+  cantidad    Decimal  @db.Decimal(18, 3)
+  precio      Decimal  @db.Decimal(18, 2) // precio al momento de la cotización
+
+  @@index([ventaId])
+  @@map("venta_items")
+}
+
+// ──────────────────────────────────────────────────────────────
+// Impuestos Municipales — Módulo 09
+// ──────────────────────────────────────────────────────────────
+
+enum EstadoImpuesto {
+  PENDIENTE
+  PAGADO
+}
+
+/// Actividad económica municipal del contribuyente (cada una con su alícuota).
+model ActividadEconomica {
+  id              String              @id @default(uuid())
+  contribuyenteId String              @map("contribuyente_id")
+  contribuyente   Contribuyente       @relation(fields: [contribuyenteId], references: [id])
+  codigo          String
+  descripcion     String
+  alicuota        Decimal             @db.Decimal(5, 2) // %
+  activa          Boolean             @default(true)
+  impuestos       ImpuestoMunicipal[]
+  createdAt       DateTime            @default(now()) @map("created_at")
+
+  @@unique([contribuyenteId, codigo])
+  @@index([contribuyenteId])
+  @@map("actividades_economicas")
+}
+
+/// Impuesto municipal calculado por período sobre una actividad. Pago presencial/online se registra.
+model ImpuestoMunicipal {
+  id              String             @id @default(uuid())
+  contribuyenteId String             @map("contribuyente_id")
+  contribuyente   Contribuyente      @relation(fields: [contribuyenteId], references: [id])
+  actividadId     String             @map("actividad_id")
+  actividad       ActividadEconomica @relation(fields: [actividadId], references: [id])
+  periodo         String // "2026-06"
+  base            Decimal            @db.Decimal(18, 2)
+  monto           Decimal            @db.Decimal(18, 2)
+  estado          EstadoImpuesto     @default(PENDIENTE)
+  referenciaPago  String?            @map("referencia_pago")
+  fechaPago       DateTime?          @map("fecha_pago") @db.Date
+  createdAt       DateTime           @default(now()) @map("created_at")
+
+  @@index([contribuyenteId])
+  @@map("impuestos_municipales")
 }
 
 // ──────────────────────────────────────────────────────────────

@@ -8,5 +8,6 @@ import { FacturadorService } from './facturador.service';
   imports: [PuntosEmisionModule],
   controllers: [FacturadorController],
   providers: [FacturadorService],
+  exports: [FacturadorService], // Ventas convierte una venta confirmada en factura
 })
 export class FacturadorModule {}
