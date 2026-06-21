@@ -56,6 +56,7 @@ model Contribuyente {
   ventas               Venta[]
   actividadesEconomicas ActividadEconomica[]
   impuestosMunicipales ImpuestoMunicipal[]
+  retencionesRecibidas RetencionRecibida[]
   auditoria            RegistroAuditoria[]
   createdAt            DateTime             @default(now()) @map("created_at")
   updatedAt            DateTime             @updatedAt @map("updated_at")
@@ -260,6 +261,7 @@ model DocumentoFiscal {
   tasaMoneda      String           @default("USD") @map("tasa_moneda")
   desgloseIva     Json             @map("desglose_iva")
   thirdParty      Json?            @map("third_party")
+  datosEnvio      Json?            @map("datos_envio") // guía de despacho: conductor, vehículo, direcciones
   items           DocumentoItem[]
   pagos           PagoDocumento[]
   createdAt       DateTime         @default(now()) @map("created_at")
@@ -284,6 +286,7 @@ model DocumentoItem {
   costoTotal    Decimal         @map("costo_total") @db.Decimal(18, 2)
   taxElm        String          @map("tax_elm") // G / E
   taxPercentage String          @map("tax_percentage") // "16%"
+  pesoKg        Decimal?        @map("peso_kg") @db.Decimal(18, 3) // guía de despacho
 
   @@index([documentoId])
   @@map("documento_items")
@@ -383,6 +386,25 @@ model ComprobanteRetencion {
   @@unique([contribuyenteId, tipo, docNum])
   @@index([contribuyenteId])
   @@map("comprobantes_retencion")
+}
+
+/// Retenciones que nos PRACTICAN los clientes (no las emitimos) — RN-133. Solo registro.
+model RetencionRecibida {
+  id              String        @id @default(uuid())
+  contribuyenteId String        @map("contribuyente_id")
+  contribuyente   Contribuyente @relation(fields: [contribuyenteId], references: [id])
+  tipo            TipoRetencion // IVA / ISLR
+  numero          String // nº del comprobante que emitió el agente (cliente)
+  fecha           DateTime      @db.Date
+  agenteRif       String        @map("agente_rif") // quién nos retuvo
+  agenteNombre    String?       @map("agente_nombre")
+  facturaRef      String?       @map("factura_ref") // nuestra factura sobre la que retuvieron
+  base            Decimal       @db.Decimal(18, 2)
+  monto           Decimal       @db.Decimal(18, 2)
+  createdAt       DateTime      @default(now()) @map("created_at")
+
+  @@index([contribuyenteId])
+  @@map("retenciones_recibidas")
 }
 
 // ──────────────────────────────────────────────────────────────

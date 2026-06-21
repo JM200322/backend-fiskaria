@@ -20,6 +20,7 @@ import { ImprentaModule } from './modules/imprenta/imprenta.module';
 import { ProductosModule } from './modules/productos/productos.module';
 import { PuntosEmisionModule } from './modules/puntos-emision/puntos-emision.module';
 import { SeniatModule } from './modules/seniat/seniat.module';
+import { TasasModule } from './modules/tasas/tasas.module';
 import { TercerosModule } from './modules/terceros/terceros.module';
 import { UsuariosModule } from './modules/usuarios/usuarios.module';
 import { VentasModule } from './modules/ventas/ventas.module';
@@ -49,6 +50,7 @@ import { VentasModule } from './modules/ventas/ventas.module';
     AuditoriaModule,
     SeniatModule,
     ImprentaModule,
+    TasasModule,
 
     // Módulos de dominio.
     AuthModule,

@@ -5,6 +5,7 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { RequierePermisos } from '../auth/decorators/require-permisos.decorator';
 import { AuthenticatedUser } from '../auth/types/authenticated-user';
 import { EmitirFacturaDto } from './dto/emitir-factura.dto';
+import { EmitirGuiaDto } from './dto/emitir-guia.dto';
 import { EmitirNotaDto } from './dto/emitir-nota.dto';
 import { FacturadorService } from './facturador.service';
 
@@ -45,6 +46,13 @@ export class FacturadorController {
     @Ip() ip: string,
   ) {
     return this.facturador.emitirNotaDebito(dto, actor, ip);
+  }
+
+  @Post('guia-despacho')
+  @RequierePermisos('facturas:crear')
+  @ApiOperation({ summary: 'Emitir guía de despacho (movimiento de mercancía, sin factura previa)' })
+  emitirGuia(@Body() dto: EmitirGuiaDto, @CurrentUser() actor: AuthenticatedUser, @Ip() ip: string) {
+    return this.facturador.emitirGuiaDespacho(dto, actor, ip);
   }
 
   @Get()

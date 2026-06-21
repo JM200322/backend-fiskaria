@@ -86,10 +86,13 @@ export class EmitirFacturaDto {
   @Type(() => PagoDto)
   pagos: PagoDto[];
 
-  @ApiProperty({ description: 'Tasa BCV usada (Bs por USD). Se persiste en el documento (RN-118).' })
+  @ApiPropertyOptional({
+    description: 'Tasa BCV (Bs por USD). Si se omite, se toma del servicio de tasas (RN-118).',
+  })
+  @IsOptional()
   @IsNumber()
   @IsPositive()
-  tasaBcv: number;
+  tasaBcv?: number;
 
   @ApiPropertyOptional({ description: 'Notificar al cliente por correo', default: true })
   @IsOptional()

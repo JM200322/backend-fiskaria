@@ -13,7 +13,7 @@ Qué está **listo para integrar** y qué **falta**, mapeado contra los **11 mó
 
 - ✅ **Listos: 9 módulos completos** + **2 parciales** (con su parte central ya usable).
 - ❌ **Falta: 1 módulo** (SENIAT/Cumplimiento) + el panel de Imprenta.
-- Avance estimado: **~88%**.
+- Avance estimado: **~92%**.
 
 | # | Módulo (SDD) | Estado |
 |---|---|---|
@@ -26,7 +26,7 @@ Qué está **listo para integrar** y qué **falta**, mapeado contra los **11 mó
 | 9 | Impuestos municipales | ✅ Listo |
 | 1 | Dashboard | ✅ Listo |
 | 11 | Usuarios / Roles / Auditoría | ✅ Listo (falta envío SMTP de clave temporal) |
-| 2 | Facturador | 🟡 Parcial — Factura + NC/ND ✅ (falta guía despacho, contingencia, PDF) |
+| 2 | Facturador | 🟡 Parcial — Factura + NC/ND + Guía de despacho ✅ (falta contingencia, PDF) |
 | 7 | Contabilidad | 🟡 Parcial — plan de cuentas, asientos y libros ✅ (falta posteo automático y TXT/XML) |
 | 10 | Imprenta Digital | 🟡 Integración interna ✅ (modo mock); falta el panel |
 | 8 | SENIAT / Cumplimiento (exportadores) | ❌ Falta (formato TXT/XML pendiente) |
@@ -90,18 +90,20 @@ Todos bajo `http://localhost:3000/api`. Salvo los marcados *(público)*, requier
 | GET | `/categorias-fiscales` · `/categorias-comerciales` | `productos:ver` |
 | POST | `/categorias-comerciales` | `productos:crear` |
 
-### Facturador (módulo 2) — Factura + NC/ND
+### Facturador (módulo 2) — Factura + NC/ND + Guía de despacho
 | Método | Ruta | Permiso |
 |---|---|---|
 | POST | `/documentos/factura` | `facturas:crear` |
 | POST | `/documentos/nota-credito` | `facturas:crear` |
 | POST | `/documentos/nota-debito` | `facturas:crear` |
+| POST | `/documentos/guia-despacho` | `facturas:crear` |
 | POST | `/documentos/:id/reintentar` | `facturas:crear` |
 | GET | `/documentos?tipo=&estatus=` · `/documentos/:id` | `facturas:ver` |
 
 > Documentos **inmutables**: no hay `PATCH`/`DELETE`. Si la imprenta no responde, el
 > documento queda `NO_ENVIADO` (sin `numeroControl`) y se reintenta. La factura siempre en Bs;
-> `tasaBcv` se envía en el body y se persiste.
+> `tasaBcv` es **opcional** en el body: si se omite, el backend la toma del servicio de tasas.
+> La **guía de despacho** no requiere factura previa, no descuenta stock y no exige RIF validado.
 
 ### Compras y Retenciones (módulo 4)
 | Método | Ruta | Permiso |
@@ -111,9 +113,12 @@ Todos bajo `http://localhost:3000/api`. Salvo los marcados *(público)*, requier
 | POST | `/compras/:id/pagos` | `compras:crear` |
 | POST | `/retenciones/iva` · `/retenciones/islr` | `compras:crear` |
 | GET | `/retenciones` | `compras:ver` |
+| POST | `/retenciones-recibidas` | `compras:crear` |
+| GET | `/retenciones-recibidas?tipo=` | `compras:ver` |
 
-> Las retenciones solo las emite un **agente de retención** (403 si no lo es) y referencian
-> la **factura del proveedor** (requieren su `numeroControl`).
+> Las retenciones **emitidas** solo las hace un **agente de retención** (403 si no lo es) y
+> referencian la **factura del proveedor** (requieren su `numeroControl`). Las **recibidas**
+> son las que nos practican los clientes (solo registro).
 
 ### Contabilidad (módulo 7) — plan, asientos, libros
 | Método | Ruta | Permiso |
@@ -157,6 +162,15 @@ Todos bajo `http://localhost:3000/api`. Salvo los marcados *(público)*, requier
 > `/resumen`: ventas del mes, situación fiscal (débito − crédito − retenciones) y alertas
 > (stock crítico, documentos "no enviado"). `/ventas`: serie para el gráfico.
 
+### Tasas (USD/EUR)
+| Método | Ruta | Permiso |
+|---|---|---|
+| GET | `/tasas/ultimas` | autenticado |
+| GET | `/tasas/fecha/:fecha` | autenticado |
+
+> Consume el microservicio externo `tasas-bcv`. Si no responde, devuelve la **última tasa
+> conocida** (campo `fuente: "cache"`). En dev funciona en modo mock.
+
 ### Roles y permisos (semilla)
 - **Administrador**: todo el comercio (excepto alta/validación de contribuyentes).
 - **Operador**: facturas, ventas, inventario, productos, terceros.
@@ -172,18 +186,17 @@ Todos bajo `http://localhost:3000/api`. Salvo los marcados *(público)*, requier
 |---|---|
 | **8 · SENIAT / Cumplimiento** | Exportadores de libros legales, declaraciones, carpeta de inspección (formato TXT/XML pendiente del revisor fiscal) |
 | **10 · Imprenta (panel)** | Pantalla de estado de transmisiones / documentos "no enviado" |
-| **2 · Facturador (resto)** | Guía de despacho, factura en contingencia, PDF protegido |
-| **4 · Compras (resto)** | Retenciones *recibidas* (las que practican los clientes) |
+| **2 · Facturador (resto)** | Factura en contingencia, PDF protegido, factura a terceros |
 | **7 · Contabilidad (resto)** | Posteo automático de asientos, TXT/XML Providencia 00071, Balance General |
 | **11 (resto)** | Envío por **SMTP** de la clave temporal (hoy se entrega en dev) |
-| **tasas-bcv** | Consumo del microservicio externo de tasas USD/EUR |
 
 ---
 
 ## 🧩 Piezas internas listas (no son pantallas, las usan los módulos)
 
 - **Validador SENIAT** (`GET /rif/:rif`) — con modo mock para dev (`SENIAT_MOCK`).
-- **Imprenta Digital** — adaptador con modo mock (`IMPRENTA_MOCK`); emite factura, NC, ND y retenciones IVA/ISLR.
+- **Imprenta Digital** — adaptador con modo mock (`IMPRENTA_MOCK`); emite factura, NC, ND, guía de despacho y retenciones IVA/ISLR.
+- **tasas-bcv** — cliente del microservicio externo con modo mock y fallback a última tasa (RN-117); el Facturador la usa al emitir si no se envía.
 - **Numeración correlativa** sin saltos por punto de emisión y tipo (RN-006/128), probada bajo concurrencia.
 - **`fiscal-utils`** — cálculo de IVA por alícuota, IGTF 3% y redondeo (con tests unitarios).
 - **Auditoría** transversal (append-only) y **RBAC** por permisos `modulo:accion`.

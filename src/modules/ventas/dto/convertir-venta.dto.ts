@@ -1,6 +1,14 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { ArrayMinSize, IsArray, IsNumber, IsPositive, IsUUID, ValidateNested } from 'class-validator';
+import {
+  ArrayMinSize,
+  IsArray,
+  IsNumber,
+  IsOptional,
+  IsPositive,
+  IsUUID,
+  ValidateNested,
+} from 'class-validator';
 import { PagoDto } from '../../facturador/dto/emitir-factura.dto';
 
 /** Convierte una venta confirmada en factura: agrega lo que el Facturador necesita. */
@@ -9,10 +17,11 @@ export class ConvertirVentaDto {
   @IsUUID()
   puntoEmisionId: string;
 
-  @ApiProperty({ description: 'Tasa BCV usada (Bs por USD), se persiste en la factura' })
+  @ApiPropertyOptional({ description: 'Tasa BCV. Si se omite, se toma del servicio de tasas.' })
+  @IsOptional()
   @IsNumber()
   @IsPositive()
-  tasaBcv: number;
+  tasaBcv?: number;
 
   @ApiProperty({ type: [PagoDto] })
   @IsArray()

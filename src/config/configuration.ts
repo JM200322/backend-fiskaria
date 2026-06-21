@@ -59,4 +59,11 @@ export default () => ({
     // En dev no existe el endpoint real: se simula la asignación de número de control.
     mock: (process.env.IMPRENTA_MOCK ?? 'true').toLowerCase() === 'true',
   },
+
+  // Microservicio externo de tasas BCV (USD/EUR). Repo aparte; el backend solo consume.
+  tasasBcv: {
+    baseUrl: process.env.TASAS_BCV_URL ?? 'http://localhost:3005',
+    timeoutMs: parseInt(process.env.TASAS_BCV_TIMEOUT_MS ?? '6000', 10),
+    mock: (process.env.TASAS_BCV_MOCK ?? 'true').toLowerCase() === 'true',
+  },
 });

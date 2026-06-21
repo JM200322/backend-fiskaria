@@ -18,12 +18,15 @@ import { AuthenticatedUser } from '../auth/types/authenticated-user';
 import { ImprentaService } from '../imprenta/imprenta.service';
 import { ImprentaError, ImprentaRespuesta } from '../imprenta/imprenta.types';
 import { construirPayloadFactura } from '../imprenta/mappers/factura.mapper';
+import { construirPayloadGuia } from '../imprenta/mappers/guia.mapper';
 import {
   construirPayloadNotaCredito,
   construirPayloadNotaDebito,
 } from '../imprenta/mappers/nota.mapper';
 import { NumeracionService } from '../puntos-emision/numeracion.service';
+import { TasasService } from '../tasas/tasas.service';
 import { EmitirFacturaDto, ItemFacturaDto, MetodoPagoDto } from './dto/emitir-factura.dto';
+import { EmitirGuiaDto } from './dto/emitir-guia.dto';
 import { EmitirNotaDto } from './dto/emitir-nota.dto';
 
 const ETIQUETA_PAGO: Record<MetodoPagoDto, string> = {
@@ -41,8 +44,17 @@ export class FacturadorService {
     private readonly prisma: PrismaService,
     private readonly numeracion: NumeracionService,
     private readonly imprenta: ImprentaService,
+    private readonly tasas: TasasService,
     private readonly auditoria: AuditoriaService,
   ) {}
+
+  /** Usa la tasa enviada o, si falta, la del servicio de tasas (RN-118). */
+  private async resolverTasa(tasaBcv?: number): Promise<number> {
+    if (tasaBcv) return tasaBcv;
+    const tasa = await this.tasas.obtenerTasa('USD');
+    if (!tasa) throw new BadRequestException('No hay tasa BCV disponible');
+    return Number(tasa);
+  }
 
   async emitirFactura(dto: EmitirFacturaDto, actor: AuthenticatedUser, ip?: string) {
     const contribuyenteId = this.tenantId(actor);
@@ -84,6 +96,7 @@ export class FacturadorService {
 
     const ahora = new Date();
     const hora = ahora.toISOString().slice(11, 19); // HH:MM:SS
+    const tasaBcv = await this.resolverTasa(dto.tasaBcv); // del servicio si no se envió
 
     // 6. Transacción atómica: numeración + documento + descuento de stock (RN-006/121).
     const creado = await this.prisma.$transaction(async (tx) => {
@@ -104,7 +117,7 @@ export class FacturadorService {
           totalTax: calc.totalIva,
           totalWTaxes: calc.total,
           igtf,
-          tasaBcv: dto.tasaBcv,
+          tasaBcv,
           desgloseIva: calc.desglose as unknown as Prisma.InputJsonValue,
           items: {
             create: lineas.map((l) => ({
@@ -268,6 +281,79 @@ export class FacturadorService {
     return doc;
   }
 
+  /** Emite una Guía de Despacho (movimiento de mercancía, sin factura previa — RN-131). */
+  async emitirGuiaDespacho(dto: EmitirGuiaDto, actor: AuthenticatedUser, ip?: string) {
+    const contribuyenteId = this.tenantId(actor);
+
+    const punto = await this.prisma.puntoEmision.findFirst({
+      where: { id: dto.puntoEmisionId, contribuyenteId },
+    });
+    if (!punto || !punto.activo) throw new BadRequestException('Punto de emisión inválido');
+
+    const cliente = await this.prisma.tercero.findFirst({
+      where: { id: dto.clienteId, contribuyenteId, deletedAt: null },
+    });
+    if (!cliente) throw new NotFoundException('Cliente no encontrado');
+
+    const { lineas, calc } = await this.prepararLineas(dto.items, contribuyenteId);
+    const ahora = new Date();
+    const hora = ahora.toISOString().slice(11, 19);
+    const tasaBcv = await this.resolverTasa(dto.tasaBcv);
+
+    const datosEnvio = {
+      conductor: {
+        nombre: dto.conductor.nombre,
+        tipoId: dto.conductor.documento.charAt(0),
+        idNum: dto.conductor.documento.replace(/[\s-]/g, '').slice(1),
+      },
+      vehiculo: dto.vehiculo,
+      direccionOrigen: dto.direccionOrigen,
+      direccionDestino: dto.direccionDestino,
+      ordenCompra: dto.ordenCompra ?? '',
+    };
+
+    const creado = await this.prisma.$transaction(async (tx) => {
+      const { docNum } = await this.numeracion.siguiente(punto.id, TipoDocumento.GUIA_DESPACHO, tx);
+      // La guía NO descuenta stock ni lleva IGTF (no es una venta).
+      return tx.documentoFiscal.create({
+        data: {
+          contribuyenteId,
+          puntoEmisionId: punto.id,
+          tipo: TipoDocumento.GUIA_DESPACHO,
+          docNum,
+          estatus: EstatusDocumento.NO_ENVIADO,
+          clienteTerceroId: cliente.id,
+          reasonTo: dto.motivo,
+          fecha: ahora,
+          hora,
+          paymentMethod: 'N/A',
+          subtotal: calc.subtotal,
+          totalTax: calc.totalIva,
+          totalWTaxes: calc.total,
+          igtf: '0.00',
+          tasaBcv,
+          desgloseIva: calc.desglose as unknown as Prisma.InputJsonValue,
+          datosEnvio: datosEnvio as unknown as Prisma.InputJsonValue,
+          items: {
+            create: lineas.map((l, i) => ({
+              productoId: l.producto.id,
+              descripcion: l.producto.nombre,
+              codigo: l.producto.codigo,
+              cantidad: l.cantidad,
+              costoUnit: l.costoUnit.toFixed(2),
+              costoTotal: l.costoTotal.toFixed(2),
+              taxElm: l.alicuota.gt(0) ? 'G' : 'E',
+              taxPercentage: `${l.alicuota.toString()}%`,
+              pesoKg: dto.items[i].pesoKg,
+            })),
+          },
+        },
+      });
+    });
+
+    return this.transmitir(creado.id, actor, ip);
+  }
+
   /** Productos → líneas (con alícuota por categoría fiscal/override) + cálculo fiscal. */
   private async prepararLineas(items: ItemFacturaDto[], contribuyenteId: string) {
     const productos = await this.prisma.producto.findMany({
@@ -324,6 +410,7 @@ export class FacturadorService {
       costoTotal: Number(it.costoTotal),
       taxElm: it.taxElm,
       taxPercentage: it.taxPercentage,
+      pesoKg: Number(it.pesoKg ?? 0),
     }));
     const totales = {
       subtotal: Number(doc.subtotal),
@@ -332,12 +419,13 @@ export class FacturadorService {
       igtf: Number(doc.igtf),
       tasaBcv: Number(doc.tasaBcv),
     };
-    const accionBase =
-      doc.tipo === TipoDocumento.NOTA_CREDITO
-        ? 'nota_credito'
-        : doc.tipo === TipoDocumento.NOTA_DEBITO
-          ? 'nota_debito'
-          : 'factura';
+    const accionBase: Record<string, string> = {
+      NOTA_CREDITO: 'nota_credito',
+      NOTA_DEBITO: 'nota_debito',
+      GUIA_DESPACHO: 'guia_despacho',
+      FACTURA: 'factura',
+    };
+    const accion = accionBase[doc.tipo] ?? 'documento';
 
     try {
       let resp: ImprentaRespuesta;
@@ -351,6 +439,33 @@ export class FacturadorService {
             paymentMethod: doc.paymentMethod,
             notificarCliente: true,
             ...totales,
+            items,
+          }),
+        );
+      } else if (doc.tipo === TipoDocumento.GUIA_DESPACHO) {
+        const envio = (doc.datosEnvio ?? {}) as {
+          conductor: { nombre: string; tipoId: string; idNum: string };
+          vehiculo: { placa: string; marca?: string; modelo?: string; color?: string };
+          direccionOrigen: string;
+          direccionDestino: string;
+          ordenCompra?: string;
+        };
+        resp = await this.imprenta.generarGuiaDespacho(
+          construirPayloadGuia({
+            docNum: doc.docNum,
+            cliente,
+            conductor: envio.conductor,
+            vehiculo: envio.vehiculo,
+            ordenCompra: envio.ordenCompra,
+            motivo: doc.reasonTo ?? '',
+            direccionOrigen: envio.direccionOrigen,
+            direccionDestino: envio.direccionDestino,
+            fecha: doc.fecha,
+            hora: doc.hora,
+            subtotal: totales.subtotal,
+            totalTax: totales.totalTax,
+            totalWTaxes: totales.totalWTaxes,
+            tasaBcv: totales.tasaBcv,
             items,
           }),
         );
@@ -378,7 +493,7 @@ export class FacturadorService {
         data: { numeroControl: resp.numeroControl, estatus: EstatusDocumento.ENVIADO },
         include: incluir,
       });
-      await this.audit(actor, ip, `${esReintento ? 'reintentar' : 'emitir'}_${accionBase}`, docId, {
+      await this.audit(actor, ip, `${esReintento ? 'reintentar' : 'emitir'}_${accion}`, docId, {
         docNum: doc.docNum,
         numeroControl: resp.numeroControl,
       });
@@ -386,7 +501,7 @@ export class FacturadorService {
     } catch (e) {
       if (!(e instanceof ImprentaError)) throw e;
       // RN-112: la imprenta falló → el documento queda "No enviado" (no se pierde).
-      await this.audit(actor, ip, `emitir_${accionBase}_no_enviado`, docId, {
+      await this.audit(actor, ip, `emitir_${accion}_no_enviado`, docId, {
         docNum: doc.docNum,
         error: e.message,
       });

@@ -164,6 +164,46 @@ export interface ImprentaRetencionIslrPayload extends ImprentaRetencionPartes {
   }[];
 }
 
+/** Payload de `POST /generateShippingOrder` (guía de despacho). `adress`/`weigth` sic. */
+export interface ImprentaGuiaPayload {
+  type: 'GUIA_DESPACHO';
+  doc_num: string;
+  client_full_name: string;
+  client_type_id: string;
+  client_id_num: string;
+  client_address: string;
+  client_phone: string;
+  client_email: string;
+  driver_full_name: string;
+  driver_type_id: string;
+  driver_id_num: string;
+  car_plate: string;
+  car_make: string;
+  car_model: string;
+  car_color: string;
+  buy_order: string;
+  reason_to: string;
+  adress_from: string;
+  adress_to: string;
+  emition_date: string;
+  emition_hour: string;
+  subtotal: number;
+  total_w_taxes: number;
+  total_tax: number;
+  igtf: number;
+  tasa_bcv: number;
+  shipping_order_elem: {
+    description_elm_shipping_order: string;
+    code_elm_shipping_order: string;
+    num_elm_shipping_order: number;
+    cost_unit_elm_shipping_order: number;
+    cost_total_elm_shipping_order: number;
+    weigth_elm_shipping_orders: string;
+    tax_elm_shipping_order: string;
+    tax_percentage_shipping_order: string;
+  }[];
+}
+
 /** Respuesta normalizada del adaptador (el formato real de la imprenta está pendiente). */
 export interface ImprentaRespuesta {
   numeroControl: string;

@@ -117,6 +117,10 @@ CORS_ORIGINS=http://localhost:3001,http://localhost:5173
 - **Imprenta Digital en modo mock** (`IMPRENTA_MOCK=true`): simula el número de control sin
   llamar a la imprenta real (cuyo contrato aún está incompleto). Para probar el camino
   "no enviado", un RIF de cliente/proveedor que contenga `999` hace fallar la imprenta.
+- **Tasas BCV en modo mock** (`TASAS_BCV_MOCK=true`): no llama al microservicio externo;
+  devuelve USD 523.675 / EUR 598.12. El campo `tasaBcv` al emitir factura/guía es **opcional**:
+  si se omite, el backend toma la tasa del servicio. Si el micro real no responde, usa la
+  última tasa conocida en caché.
 - **Datos del seed**: además de los usuarios y roles, crea un **comercio demo** (RIF
   `J-00000000-0`), un **punto de emisión** (`01`) y un catálogo de **categorías fiscales**
   (16% / 8% / 31% / Exento / Exonerado). Ya puedes facturar contra ese comercio.

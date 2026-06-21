@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import {
   ImprentaError,
   ImprentaFacturaPayload,
+  ImprentaGuiaPayload,
   ImprentaNotaCreditoPayload,
   ImprentaNotaDebitoPayload,
   ImprentaRespuesta,
@@ -57,6 +58,13 @@ export class ImprentaService {
       return this.simular(payload.doc_num, payload.beneficiary_doc_id);
     }
     return this.post('/generateVoucherIslr', payload);
+  }
+
+  async generarGuiaDespacho(payload: ImprentaGuiaPayload): Promise<ImprentaRespuesta> {
+    if (this.config.get<boolean>('imprenta.mock')) {
+      return this.simular(payload.doc_num, payload.client_id_num);
+    }
+    return this.post('/generateShippingOrder', payload);
   }
 
   /** Simulación común (dev): falla si el RIF del cliente contiene "999". */
