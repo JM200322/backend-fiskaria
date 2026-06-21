@@ -37,6 +37,13 @@ export interface ImprentaFacturaPayload {
   igtf: number;
   tasa_bcv: number;
   bill_items: ImprentaBillItem[];
+  // Solo en FACTURA_TERCEROS (RN-126):
+  third_party_full_name?: string;
+  third_party_type_id?: string;
+  third_party_id_num?: string;
+  third_party_address?: string;
+  third_party_phone?: string;
+  third_party_email?: string;
 }
 
 /** Datos del comprador comunes a factura/NC/ND. */

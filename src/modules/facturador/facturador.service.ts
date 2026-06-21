@@ -17,7 +17,7 @@ import { AuditoriaService } from '../auditoria/auditoria.service';
 import { AuthenticatedUser } from '../auth/types/authenticated-user';
 import { ImprentaService } from '../imprenta/imprenta.service';
 import { ImprentaError, ImprentaRespuesta } from '../imprenta/imprenta.types';
-import { construirPayloadFactura } from '../imprenta/mappers/factura.mapper';
+import { construirPayloadFactura, DatosFacturaImprenta } from '../imprenta/mappers/factura.mapper';
 import { construirPayloadGuia } from '../imprenta/mappers/guia.mapper';
 import {
   construirPayloadNotaCredito,
@@ -98,6 +98,21 @@ export class FacturadorService {
     const hora = ahora.toISOString().slice(11, 19); // HH:MM:SS
     const tasaBcv = await this.resolverTasa(dto.tasaBcv); // del servicio si no se envió
 
+    // Factura a terceros (RN-126): se persiste el bloque third_party.
+    const thirdParty = dto.tercero
+      ? (() => {
+          const d = dto.tercero.documento.toUpperCase().replace(/[\s-]/g, '');
+          return {
+            nombre: dto.tercero.nombre,
+            tipoId: d.charAt(0),
+            idNum: d.slice(1),
+            direccion: dto.tercero.direccion ?? null,
+            telefono: dto.tercero.telefono ?? null,
+            email: dto.tercero.email ?? null,
+          };
+        })()
+      : null;
+
     // 6. Transacción atómica: numeración + documento + descuento de stock (RN-006/121).
     const creado = await this.prisma.$transaction(async (tx) => {
       const { docNum } = await this.numeracion.siguiente(punto.id, TipoDocumento.FACTURA, tx);
@@ -119,6 +134,7 @@ export class FacturadorService {
           igtf,
           tasaBcv,
           desgloseIva: calc.desglose as unknown as Prisma.InputJsonValue,
+          thirdParty: (thirdParty ?? undefined) as unknown as Prisma.InputJsonValue,
           items: {
             create: lineas.map((l) => ({
               productoId: l.producto.id,
@@ -262,6 +278,25 @@ export class FacturadorService {
     return this.transmitir(doc.id, actor, ip, true);
   }
 
+  /**
+   * Reprocesa los documentos en estatus "No enviado" reintentando la transmisión a la
+   * imprenta (RN-112). Lo invoca el job programado (sin usuario) y el endpoint manual.
+   */
+  async reprocesarNoEnviados(limite = 25): Promise<{ intentados: number; enviados: number }> {
+    const pendientes = await this.prisma.documentoFiscal.findMany({
+      where: { estatus: EstatusDocumento.NO_ENVIADO },
+      orderBy: { createdAt: 'asc' },
+      take: limite,
+      select: { id: true },
+    });
+    let enviados = 0;
+    for (const d of pendientes) {
+      const doc = await this.transmitir(d.id, null, undefined, true);
+      if (doc.estatus === EstatusDocumento.ENVIADO) enviados++;
+    }
+    return { intentados: pendientes.length, enviados };
+  }
+
   async listar(actor: AuthenticatedUser, opts: { tipo?: TipoDocumento; estatus?: EstatusDocumento } = {}) {
     const contribuyenteId = this.tenantId(actor);
     return this.prisma.documentoFiscal.findMany({
@@ -383,7 +418,12 @@ export class FacturadorService {
    * Construye el payload según el tipo, llama a la imprenta y actualiza estatus/numeroControl.
    * Sirve para Factura, Nota de Crédito y Nota de Débito (y para reintentos).
    */
-  private async transmitir(docId: string, actor: AuthenticatedUser, ip?: string, esReintento = false) {
+  private async transmitir(
+    docId: string,
+    actor: AuthenticatedUser | null,
+    ip?: string,
+    esReintento = false,
+  ) {
     const doc = await this.prisma.documentoFiscal.findUniqueOrThrow({
       where: { id: docId },
       include: {
@@ -440,6 +480,7 @@ export class FacturadorService {
             notificarCliente: true,
             ...totales,
             items,
+            tercero: doc.thirdParty as DatosFacturaImprenta['tercero'],
           }),
         );
       } else if (doc.tipo === TipoDocumento.GUIA_DESPACHO) {
@@ -493,18 +534,26 @@ export class FacturadorService {
         data: { numeroControl: resp.numeroControl, estatus: EstatusDocumento.ENVIADO },
         include: incluir,
       });
-      await this.audit(actor, ip, `${esReintento ? 'reintentar' : 'emitir'}_${accion}`, docId, {
-        docNum: doc.docNum,
-        numeroControl: resp.numeroControl,
-      });
+      await this.audit(
+        actor,
+        ip,
+        `${esReintento ? 'reintentar' : 'emitir'}_${accion}`,
+        docId,
+        { docNum: doc.docNum, numeroControl: resp.numeroControl },
+        doc.contribuyenteId,
+      );
       return actualizado;
     } catch (e) {
       if (!(e instanceof ImprentaError)) throw e;
       // RN-112: la imprenta falló → el documento queda "No enviado" (no se pierde).
-      await this.audit(actor, ip, `emitir_${accion}_no_enviado`, docId, {
-        docNum: doc.docNum,
-        error: e.message,
-      });
+      await this.audit(
+        actor,
+        ip,
+        `emitir_${accion}_no_enviado`,
+        docId,
+        { docNum: doc.docNum, error: e.message },
+        doc.contribuyenteId,
+      );
       return this.prisma.documentoFiscal.findUniqueOrThrow({ where: { id: docId }, include: incluir });
     }
   }
@@ -517,15 +566,16 @@ export class FacturadorService {
   }
 
   private audit(
-    actor: AuthenticatedUser,
+    actor: AuthenticatedUser | null,
     ip: string | undefined,
     accion: string,
     entidadId: string,
     detalle?: Prisma.InputJsonValue,
+    contribuyenteId?: string,
   ) {
     return this.auditoria.registrar({
-      usuarioId: actor.id,
-      contribuyenteId: actor.contribuyenteId,
+      usuarioId: actor?.id ?? null,
+      contribuyenteId: actor?.contribuyenteId ?? contribuyenteId ?? null,
       ip,
       accion,
       entidad: 'documento_fiscal',

@@ -75,6 +75,13 @@ export class FacturadorController {
     return this.facturador.obtener(id, actor);
   }
 
+  @Post('reprocesar-no-enviados')
+  @RequierePermisos('facturas:crear')
+  @ApiOperation({ summary: 'Reprocesar manualmente todos los documentos "No enviado"' })
+  reprocesar() {
+    return this.facturador.reprocesarNoEnviados();
+  }
+
   @Post(':id/reintentar')
   @RequierePermisos('facturas:crear')
   @ApiOperation({ summary: 'Reintentar la transmisión de un documento "No enviado"' })

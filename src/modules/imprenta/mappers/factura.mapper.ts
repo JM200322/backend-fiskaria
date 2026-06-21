@@ -29,6 +29,15 @@ export interface DatosFacturaImprenta {
     taxElm: string; // "G" | "E"
     taxPercentage: string; // "16%"
   }[];
+  /** Si viene, la factura es a terceros (FACTURA_TERCEROS, RN-126). */
+  tercero?: {
+    nombre: string;
+    tipoId: string;
+    idNum: string;
+    direccion?: string | null;
+    telefono?: string | null;
+    email?: string | null;
+  } | null;
 }
 
 /** Fecha a formato del API de la imprenta: DD-MM-YYYY. */
@@ -41,8 +50,9 @@ export function formatearFechaImprenta(fecha: Date): string {
 
 /** Construye el payload de `POST /generateBill` con los nombres exactos del API. */
 export function construirPayloadFactura(datos: DatosFacturaImprenta): ImprentaFacturaPayload {
+  const t = datos.tercero;
   return {
-    type: 'FACTURA',
+    type: t ? 'FACTURA_TERCEROS' : 'FACTURA',
     client_full_name: datos.cliente.nombre,
     doc_num: datos.docNum,
     client_type_id: datos.cliente.tipoId,
@@ -70,5 +80,15 @@ export function construirPayloadFactura(datos: DatosFacturaImprenta): ImprentaFa
       tax_elm_fac: it.taxElm,
       tax_percentage: it.taxPercentage,
     })),
+    ...(t
+      ? {
+          third_party_full_name: t.nombre,
+          third_party_type_id: t.tipoId,
+          third_party_id_num: t.idNum,
+          third_party_address: t.direccion ?? '',
+          third_party_phone: t.telefono ?? '',
+          third_party_email: t.email ?? '',
+        }
+      : {}),
   };
 }

@@ -63,6 +63,31 @@ export class PagoDto {
   lotePos?: string;
 }
 
+export class TerceroFacturaDto {
+  @ApiProperty({ example: 'JUAN PEREZ' })
+  @IsString()
+  nombre: string;
+
+  @ApiProperty({ example: 'V-12345678-9', description: 'RIF/Cédula del tercero' })
+  @IsString()
+  documento: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  direccion?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  telefono?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  email?: string;
+}
+
 export class EmitirFacturaDto {
   @ApiProperty({ description: 'ID del punto de emisión' })
   @IsUUID()
@@ -98,4 +123,10 @@ export class EmitirFacturaDto {
   @IsOptional()
   @IsBoolean()
   notificarCliente?: boolean;
+
+  @ApiPropertyOptional({ type: TerceroFacturaDto, description: 'Si viene, emite FACTURA_TERCEROS (RN-126)' })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => TerceroFacturaDto)
+  tercero?: TerceroFacturaDto;
 }

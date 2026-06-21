@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { APP_GUARD } from '@nestjs/core';
+import { ScheduleModule } from '@nestjs/schedule';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import configuration from './config/configuration';
 import { validateEnv } from './config/env.validation';
@@ -33,6 +34,9 @@ import { VentasModule } from './modules/ventas/ventas.module';
       load: [configuration],
       validate: validateEnv,
     }),
+
+    // Tareas programadas (job de reproceso de documentos "no enviado", RN-112).
+    ScheduleModule.forRoot(),
 
     // Rate limiting (configurable por entorno; protección contra abuso / fuerza bruta).
     ThrottlerModule.forRootAsync({
