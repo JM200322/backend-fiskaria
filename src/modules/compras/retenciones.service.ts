@@ -4,7 +4,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { EstatusDocumento, Prisma, TipoDocumento, TipoRetencion } from '@prisma/client';
+import { CondicionFiscal, EstatusDocumento, Prisma, TipoDocumento, TipoRetencion } from '@prisma/client';
 import Decimal from 'decimal.js';
 import { redondear } from 'src/common/fiscal/calculo-fiscal';
 import { PrismaService } from 'src/prisma/prisma.service';
@@ -78,7 +78,15 @@ export class RetencionesService {
     );
     // IVA: base = IVA de la compra. ISLR: base = base imponible de la compra.
     const base = redondear(tipo === TipoRetencion.IVA ? compra.ivaCredito : compra.base);
-    const montoRetenido = redondear(base.times(porcentaje).dividedBy(100));
+    // ISLR: impuesto retenido = base × % − sustraendo (personas naturales, decreto 1.808).
+    const sustraendo =
+      tipo === TipoRetencion.ISLR
+        ? redondear((dto as EmitirRetencionIslrDto).sustraendo ?? 0)
+        : new Decimal(0);
+    const montoRetenido = Decimal.max(
+      redondear(base.times(porcentaje).dividedBy(100)).minus(sustraendo),
+      0,
+    );
 
     const periodoYear = String(compra.fecha.getUTCFullYear());
     const periodoMonth = String(compra.fecha.getUTCMonth() + 1).padStart(2, '0');
@@ -106,6 +114,11 @@ export class RetencionesService {
           porcentaje: porcentaje.toFixed(2),
           montoRetenido: montoRetenido.toFixed(2),
           conceptoIslr: tipo === TipoRetencion.ISLR ? (dto as EmitirRetencionIslrDto).concepto : null,
+          sustraendo: sustraendo.toFixed(2),
+          condicionFiscal:
+            tipo === TipoRetencion.ISLR
+              ? ((dto as EmitirRetencionIslrDto).condicionFiscal as CondicionFiscal)
+              : null,
           fecha: ahora,
           hora,
         },
@@ -165,6 +178,7 @@ export class RetencionesService {
           : await this.imprenta.generarRetencionIslr(
               construirPayloadRetencionIslr({
                 ...datos,
+                sustraendo: Number(r.sustraendo),
                 concepto: r.conceptoIslr ?? '',
                 retentionCode: '001',
               }),

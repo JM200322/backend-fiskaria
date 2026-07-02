@@ -6,6 +6,7 @@ import {
   IsDateString,
   IsEnum,
   IsNumber,
+  IsOptional,
   IsString,
   IsUUID,
   Min,
@@ -60,6 +61,24 @@ export class LineaAsientoDto {
   @Min(0)
   @Type(() => Number)
   haber: number;
+}
+
+export class DeclararIvaDto {
+  @ApiProperty({ example: 2026 })
+  @IsNumber()
+  @Type(() => Number)
+  year: number;
+
+  @ApiProperty({ example: 6 })
+  @IsNumber()
+  @Min(1)
+  @Type(() => Number)
+  month: number;
+
+  @ApiProperty({ required: false, description: 'Referencia/planilla del portal SENIAT (opcional)' })
+  @IsOptional()
+  @IsString()
+  referencia?: string;
 }
 
 export class CrearAsientoDto {

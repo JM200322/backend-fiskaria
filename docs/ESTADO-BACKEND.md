@@ -1,7 +1,7 @@
 # Estado del Backend — Fiskaria
 
 Qué está **listo para integrar** y qué **falta**, mapeado contra los **11 módulos del SDD**.
-Última actualización: **2026-06-21**.
+Última actualización: **2026-07-02**.
 
 > Para integrar el frontend en paralelo: lo **listo** se conecta a la API real ya; lo
 > **pendiente** se construye contra las specs del SDD (`modulos/*/spec.md`, `arquitectura/apis.md`)
@@ -11,9 +11,9 @@ Qué está **listo para integrar** y qué **falta**, mapeado contra los **11 mó
 
 ## Resumen
 
-- ✅ **Listos: 9 módulos completos** + **2 parciales** (con su parte central ya usable).
-- ❌ **Falta: 1 módulo** (SENIAT/Cumplimiento) + el panel de Imprenta.
-- Avance estimado: **~92%**.
+- ✅ **Listos: 10 módulos completos** + **3 parciales** (con su parte central ya usable).
+- ❌ Sin módulos por arrancar; quedan "restos" (panel de Imprenta, PDF, contingencia, asientos automáticos, .txt del portal).
+- Avance estimado: **~95%**.
 
 | # | Módulo (SDD) | Estado |
 |---|---|---|
@@ -21,15 +21,15 @@ Qué está **listo para integrar** y qué **falta**, mapeado contra los **11 mó
 | — | Puntos de Emisión | ✅ Listo |
 | 6 | Clientes / Terceros | ✅ Listo |
 | 5 | Inventario / Productos | ✅ Listo |
-| 4 | Compras y Retenciones | ✅ Listo (falta retenciones *recibidas*) |
+| 4 | Compras y Retenciones | ✅ Listo (emitidas + recibidas, ISLR con sustraendo/condición fiscal) |
 | 3 | Ventas | ✅ Listo |
 | 9 | Impuestos municipales | ✅ Listo |
 | 1 | Dashboard | ✅ Listo |
 | 11 | Usuarios / Roles / Auditoría | ✅ Listo (falta envío SMTP de clave temporal) |
-| 2 | Facturador | 🟡 Parcial — Factura + NC/ND + Guía de despacho ✅ (falta contingencia, PDF) |
-| 7 | Contabilidad | 🟡 Parcial — plan de cuentas, asientos y libros ✅ (falta posteo automático y TXT/XML) |
+| 8 | SENIAT / Cumplimiento | 🟢 Casi — libros formato oficial + declarar período ✅ (falta solo el `.txt` del portal) |
+| 2 | Facturador | 🟡 Parcial — Factura (+ a terceros) + NC/ND + Guía + reproceso automático ✅ (falta contingencia, PDF) |
+| 7 | Contabilidad | 🟡 Parcial — plan de cuentas, asientos, libros y declaraciones ✅ (falta posteo automático) |
 | 10 | Imprenta Digital | 🟡 Integración interna ✅ (modo mock); falta el panel |
-| 8 | SENIAT / Cumplimiento (exportadores) | ❌ Falta (formato TXT/XML pendiente) |
 
 ---
 
@@ -98,11 +98,14 @@ Todos bajo `http://localhost:3000/api`. Salvo los marcados *(público)*, requier
 | POST | `/documentos/nota-debito` | `facturas:crear` |
 | POST | `/documentos/guia-despacho` | `facturas:crear` |
 | POST | `/documentos/:id/reintentar` | `facturas:crear` |
+| POST | `/documentos/reprocesar-no-enviados` | `facturas:crear` |
 | GET | `/documentos?tipo=&estatus=` · `/documentos/:id` | `facturas:ver` |
 
 > Documentos **inmutables**: no hay `PATCH`/`DELETE`. Si la imprenta no responde, el
-> documento queda `NO_ENVIADO` (sin `numeroControl`) y se reintenta. La factura siempre en Bs;
-> `tasaBcv` es **opcional** en el body: si se omite, el backend la toma del servicio de tasas.
+> documento queda `NO_ENVIADO` (sin `numeroControl`); un **job automático** (cada 5 min) lo
+> reprocesa, y también hay reintento manual por documento o masivo (`reprocesar-no-enviados`).
+> La factura siempre en Bs; `tasaBcv` es **opcional** (si se omite, se toma del servicio de tasas).
+> **Factura a terceros**: enviar el bloque `tercero` en el body → emite `FACTURA_TERCEROS`.
 > La **guía de despacho** no requiere factura previa, no descuenta stock y no exige RIF validado.
 
 ### Compras y Retenciones (módulo 4)
@@ -119,6 +122,10 @@ Todos bajo `http://localhost:3000/api`. Salvo los marcados *(público)*, requier
 > Las retenciones **emitidas** solo las hace un **agente de retención** (403 si no lo es) y
 > referencian la **factura del proveedor** (requieren su `numeroControl`). Las **recibidas**
 > son las que nos practican los clientes (solo registro).
+>
+> ⚠️ **Cambio en ISLR**: el body ahora exige **`condicionFiscal`** (`PNR`/`PNNR`/`PJD`/`PJND`,
+> condición del retenido) y acepta **`sustraendo`** opcional (personas naturales). Cálculo:
+> `retenido = max(0, base × % − sustraendo)`.
 
 ### Contabilidad (módulo 7) — plan, asientos, libros
 | Método | Ruta | Permiso |
@@ -132,6 +139,20 @@ Todos bajo `http://localhost:3000/api`. Salvo los marcados *(público)*, requier
 | GET | `/libros/ventas?year=&month=` | `contabilidad:ver` |
 | GET | `/libros/compras?year=&month=` | `contabilidad:ver` |
 | GET | `/declaraciones/iva?year=&month=` | `contabilidad:ver` |
+| POST | `/declaraciones/iva/declarar` | `contabilidad:cerrar_periodo` |
+| GET | `/declaraciones` · `/declaraciones/:id` | `contabilidad:ver` |
+
+> ⚠️ **Los libros cambiaron de formato** (ahora siguen el layout oficial SENIAT): responden
+> `{ encabezado, filas, resumen }`. Cada fila trae `nroOperacion`, `tipoTransaccion`
+> (`01-Reg`/`02-Aju`), factura afectada, `numeroControl`, exentas y **base/IVA separados por
+> alícuota** (`porAlicuota["16"|"8"|"31"]`); el `resumen` totaliza por alícuota e incluye
+> retención de IVA. El Libro de Compras además trae la columna `retencionIva` (monto,
+> comprobante, fecha) por fila.
+>
+> **Declarar período**: `POST /declaraciones/iva/declarar { year, month, referencia? }`
+> congela un **snapshot** de libros + resumen y marca el período `DECLARADA` (re-declarar →
+> 409). **No** declara ante el SENIAT (eso es manual en el portal). El detalle
+> (`/declaraciones/:id`) incluye el snapshot completo.
 
 ### Ventas (módulo 3) — ciclo comercial → factura
 | Método | Ruta | Permiso |
@@ -184,10 +205,10 @@ Todos bajo `http://localhost:3000/api`. Salvo los marcados *(público)*, requier
 
 | Módulo | Qué incluirá |
 |---|---|
-| **8 · SENIAT / Cumplimiento** | Exportadores de libros legales, declaraciones, carpeta de inspección (formato TXT/XML pendiente del revisor fiscal) |
+| **8 · SENIAT (resto)** | Solo el archivo **`.txt` posicional** para subir al portal (layout aún no definido); los libros y "declarar período" ya están |
 | **10 · Imprenta (panel)** | Pantalla de estado de transmisiones / documentos "no enviado" |
-| **2 · Facturador (resto)** | Factura en contingencia, PDF protegido, factura a terceros |
-| **7 · Contabilidad (resto)** | Posteo automático de asientos, TXT/XML Providencia 00071, Balance General |
+| **2 · Facturador (resto)** | Factura en contingencia, PDF protegido |
+| **7 · Contabilidad (resto)** | Posteo automático de asientos (pendiente tabla evento→cuenta del contador), Balance General |
 | **11 (resto)** | Envío por **SMTP** de la clave temporal (hoy se entrega en dev) |
 
 ---
