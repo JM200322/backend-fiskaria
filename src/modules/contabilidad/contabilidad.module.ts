@@ -6,6 +6,6 @@ import { LibrosService } from './libros.service';
 @Module({
   controllers: [ContabilidadController],
   providers: [ContabilidadService, LibrosService],
-  exports: [LibrosService], // el Dashboard reutiliza el resumen de IVA
+  exports: [LibrosService, ContabilidadService], // Dashboard: resumen IVA. Facturador/Compras: asientos automáticos
 })
 export class ContabilidadModule {}

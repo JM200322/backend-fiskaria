@@ -15,6 +15,7 @@ import {
 import { PrismaService } from 'src/prisma/prisma.service';
 import { AuditoriaService } from '../auditoria/auditoria.service';
 import { AuthenticatedUser } from '../auth/types/authenticated-user';
+import { ContabilidadService } from '../contabilidad/contabilidad.service';
 import { ImprentaService } from '../imprenta/imprenta.service';
 import { ImprentaError, ImprentaRespuesta } from '../imprenta/imprenta.types';
 import { construirPayloadFactura, DatosFacturaImprenta } from '../imprenta/mappers/factura.mapper';
@@ -46,6 +47,7 @@ export class FacturadorService {
     private readonly imprenta: ImprentaService,
     private readonly tasas: TasasService,
     private readonly auditoria: AuditoriaService,
+    private readonly contabilidad: ContabilidadService,
   ) {}
 
   /** Usa la tasa enviada o, si falta, la del servicio de tasas (RN-118). */
@@ -173,7 +175,21 @@ export class FacturadorService {
       return doc;
     });
 
-    // 7. Transmisión a la Imprenta Digital (fuera de la transacción para no retener locks).
+    // 7. Libro Diario (RN-107): asiento automático, best-effort — nunca bloquea la venta.
+    await this.contabilidad.registrarAutomatico({
+      contribuyenteId,
+      fecha: ahora,
+      glosa: `Venta ${creado.docNum}`,
+      documentoRef: creado.id,
+      lineas: [
+        { evento: 'caja_banco', debe: redondear(new Decimal(calc.total).plus(igtf)) },
+        { evento: 'venta_ingreso', haber: calc.subtotal },
+        { evento: 'iva_debito', haber: calc.totalIva },
+        { evento: 'igtf', haber: igtf },
+      ],
+    });
+
+    // 8. Transmisión a la Imprenta Digital (fuera de la transacción para no retener locks).
     return this.transmitir(creado.id, actor, ip);
   }
 

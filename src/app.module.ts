@@ -21,6 +21,7 @@ import { ImprentaModule } from './modules/imprenta/imprenta.module';
 import { ProductosModule } from './modules/productos/productos.module';
 import { PuntosEmisionModule } from './modules/puntos-emision/puntos-emision.module';
 import { SeniatModule } from './modules/seniat/seniat.module';
+import { TalonariosModule } from './modules/talonarios/talonarios.module';
 import { TasasModule } from './modules/tasas/tasas.module';
 import { TercerosModule } from './modules/terceros/terceros.module';
 import { UsuariosModule } from './modules/usuarios/usuarios.module';
@@ -69,6 +70,7 @@ import { VentasModule } from './modules/ventas/ventas.module';
     ContabilidadModule,
     DashboardModule,
     MunicipalesModule,
+    TalonariosModule,
     HealthModule,
     // A medida que avancen las épicas se agregan aquí:
     // ClientesModule, ProveedoresModule, ProductosModule,

@@ -5,6 +5,7 @@ import { redondear } from 'src/common/fiscal/calculo-fiscal';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { AuditoriaService } from '../auditoria/auditoria.service';
 import { AuthenticatedUser } from '../auth/types/authenticated-user';
+import { ContabilidadService } from '../contabilidad/contabilidad.service';
 import { RegistrarCompraDto, RegistrarPagoProveedorDto } from './dto/registrar-compra.dto';
 
 @Injectable()
@@ -12,6 +13,7 @@ export class ComprasService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly auditoria: AuditoriaService,
+    private readonly contabilidad: ContabilidadService,
   ) {}
 
   async registrar(dto: RegistrarCompraDto, actor: AuthenticatedUser, ip?: string) {
@@ -34,6 +36,21 @@ export class ComprasService {
         total,
       },
     });
+    // Libro Diario (RN-107): la compra se registra a crédito (CxP); el pago se
+    // liquida aparte vía agregarPago (no genera un segundo asiento — ponytail:
+    // agregar el asiento de pago cuando el flujo de tesorería lo requiera).
+    await this.contabilidad.registrarAutomatico({
+      contribuyenteId,
+      fecha: new Date(dto.fecha),
+      glosa: `Compra ${dto.numeroFactura} — ${proveedor.nombre}`,
+      documentoRef: compra.id,
+      lineas: [
+        { evento: 'compras_gasto', debe: dto.base },
+        { evento: 'iva_credito', debe: dto.ivaCredito },
+        { evento: 'cuentas_por_pagar', haber: total },
+      ],
+    });
+
     await this.audit(actor, ip, 'registrar_compra', compra.id, { numeroFactura: dto.numeroFactura });
     return compra;
   }

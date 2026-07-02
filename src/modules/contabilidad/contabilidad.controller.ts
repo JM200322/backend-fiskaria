@@ -104,4 +104,30 @@ export class ContabilidadController {
   ) {
     return this.libros.resumenIva(actor, Number(year), Number(month));
   }
+
+  @Get('estado-resultados')
+  @RequierePermisos('contabilidad:ver')
+  @ApiOperation({ summary: 'Estado de Resultados del período (derivado del Libro Diario)' })
+  @ApiQuery({ name: 'year', example: 2026 })
+  @ApiQuery({ name: 'month', example: 6 })
+  estadoResultados(
+    @CurrentUser() actor: AuthenticatedUser,
+    @Query('year') year: string,
+    @Query('month') month: string,
+  ) {
+    return this.contabilidad.estadoResultados(actor, Number(year), Number(month));
+  }
+
+  @Get('ratios')
+  @RequierePermisos('contabilidad:ver')
+  @ApiOperation({ summary: 'Ratios financieros (solvencia, margen neto — ver nota de limitaciones)' })
+  @ApiQuery({ name: 'year', example: 2026 })
+  @ApiQuery({ name: 'month', example: 6 })
+  ratios(
+    @CurrentUser() actor: AuthenticatedUser,
+    @Query('year') year: string,
+    @Query('month') month: string,
+  ) {
+    return this.contabilidad.ratiosFinancieros(actor, Number(year), Number(month));
+  }
 }

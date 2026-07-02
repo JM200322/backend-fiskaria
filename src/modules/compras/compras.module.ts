@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { ContabilidadModule } from '../contabilidad/contabilidad.module';
 import { PuntosEmisionModule } from '../puntos-emision/puntos-emision.module';
 import { ComprasController } from './compras.controller';
 import { ComprasService } from './compras.service';
@@ -8,7 +9,9 @@ import { RetencionesRecibidasController } from './retenciones-recibidas.controll
 import { RetencionesRecibidasService } from './retenciones-recibidas.service';
 
 @Module({
-  imports: [PuntosEmisionModule], // NumeracionService para los comprobantes de retención
+  // PuntosEmisionModule: NumeracionService (comprobantes de retención).
+  // ContabilidadModule: ContabilidadService (asiento automático de compra).
+  imports: [PuntosEmisionModule, ContabilidadModule],
   controllers: [ComprasController, RetencionesController, RetencionesRecibidasController],
   providers: [ComprasService, RetencionesService, RetencionesRecibidasService],
 })

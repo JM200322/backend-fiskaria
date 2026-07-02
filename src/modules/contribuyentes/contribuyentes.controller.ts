@@ -1,9 +1,10 @@
-import { Body, Controller, Get, Ip, Param, Post } from '@nestjs/common';
+import { Body, Controller, Get, Ip, Param, Patch, Post } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { RequierePermisos } from '../auth/decorators/require-permisos.decorator';
 import { AuthenticatedUser } from '../auth/types/authenticated-user';
 import { ContribuyentesService } from './contribuyentes.service';
+import { ActualizarContribuyenteDto } from './dto/actualizar-contribuyente.dto';
 import { CrearContribuyenteDto } from './dto/crear-contribuyente.dto';
 
 @ApiTags('contribuyentes')
@@ -35,6 +36,18 @@ export class ContribuyentesController {
   @ApiOperation({ summary: 'Perfil fiscal de un contribuyente' })
   obtener(@Param('id') id: string, @CurrentUser() actor: AuthenticatedUser) {
     return this.contribuyentes.obtener(id, actor);
+  }
+
+  @Patch(':id')
+  @RequierePermisos('configuracion:editar')
+  @ApiOperation({ summary: 'Actualiza razón social / domicilio fiscal (vista Configuración)' })
+  actualizar(
+    @Param('id') id: string,
+    @Body() dto: ActualizarContribuyenteDto,
+    @CurrentUser() actor: AuthenticatedUser,
+    @Ip() ip: string,
+  ) {
+    return this.contribuyentes.actualizar(id, dto, actor, ip);
   }
 
   @Post(':id/validar')

@@ -13,6 +13,7 @@ import { AuthenticatedUser } from '../auth/types/authenticated-user';
 import { SeniatService } from '../seniat/seniat.service';
 import { ResultadoValidacionSeniat, SeniatValidationError } from '../seniat/seniat.types';
 import { PrismaService } from 'src/prisma/prisma.service';
+import { ActualizarContribuyenteDto } from './dto/actualizar-contribuyente.dto';
 import { CrearContribuyenteDto } from './dto/crear-contribuyente.dto';
 
 @Injectable()
@@ -104,6 +105,36 @@ export class ContribuyentesService {
       accion: 'validar_contribuyente',
       entidad: 'contribuyente',
       entidadId: id,
+    });
+
+    return actualizado;
+  }
+
+  /** Edita razón social / domicilio (vista Configuración). No toca RIF ni estado `validado`. */
+  async actualizar(
+    id: string,
+    dto: ActualizarContribuyenteDto,
+    actor: AuthenticatedUser,
+    ip?: string,
+  ) {
+    await this.obtener(id, actor); // valida existencia + scope
+
+    const actualizado = await this.prisma.contribuyente.update({
+      where: { id },
+      data: {
+        razonSocial: dto.razonSocial,
+        domicilioFiscal: dto.domicilioFiscal,
+      },
+    });
+
+    await this.auditoria.registrar({
+      usuarioId: actor.id,
+      contribuyenteId: id,
+      ip,
+      accion: 'actualizar_contribuyente',
+      entidad: 'contribuyente',
+      entidadId: id,
+      detalle: { razonSocial: dto.razonSocial, domicilioFiscal: dto.domicilioFiscal },
     });
 
     return actualizado;

@@ -58,6 +58,7 @@ model Contribuyente {
   impuestosMunicipales ImpuestoMunicipal[]
   retencionesRecibidas RetencionRecibida[]
   auditoria            RegistroAuditoria[]
+  talonarios           TalonarioAutorizado[]
   createdAt            DateTime             @default(now()) @map("created_at")
   updatedAt            DateTime             @updatedAt @map("updated_at")
 
@@ -199,6 +200,27 @@ model PuntoEmision {
   @@unique([contribuyenteId, codigo])
   @@index([contribuyenteId])
   @@map("puntos_emision")
+}
+
+/// Rango de números de control autorizado por el SENIAT para talonarios de
+/// contingencia (Providencia 00071: formato NN-NNNNNNNN). No confundir con
+/// `SecuenciaDocumento` (correlativo interno de Fiskaria): este rango es el
+/// autorizado externamente que se consume solo si la imprenta digital falla.
+model TalonarioAutorizado {
+  id                String        @id @default(uuid())
+  contribuyenteId   String        @map("contribuyente_id")
+  contribuyente     Contribuyente @relation(fields: [contribuyenteId], references: [id])
+  serie             String        @db.VarChar(2) // 2 dígitos identificadores de la máquina fiscal
+  desde             Int // límite inferior del rango (parte secuencial, hasta 8 dígitos)
+  hasta             Int // límite superior del rango
+  consecutivoActual Int // próximo número a emitir; arranca en `desde`
+  providenciaNum    String        @map("providencia_num") // N° de autorización SENIAT
+  activo            Boolean       @default(true)
+  createdAt         DateTime      @default(now()) @map("created_at")
+  updatedAt         DateTime      @updatedAt @map("updated_at")
+
+  @@index([contribuyenteId, serie])
+  @@map("talonarios_autorizados")
 }
 
 /// Contador correlativo por (punto de emisión, tipo de documento) — RN-128.
