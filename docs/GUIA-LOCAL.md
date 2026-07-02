@@ -152,6 +152,8 @@ CORS_ORIGINS=http://localhost:3001,http://localhost:5173
 
 | Síntoma | Causa / solución |
 |---|---|
+| Errores TS "modelo no existe" (DocumentoFiscal, Compra…) al compilar | El **cliente Prisma** está desactualizado. Corre `npx prisma generate`. (El `npm install` ya lo hace vía `postinstall`; pasa si se clonó el repo o cambió el schema sin regenerar.) |
+| 500 en endpoints que listan/agregan documentos tras clonar/actualizar | La **BD está atrás** del esquema. Aplica migraciones: `npx prisma migrate deploy`. Verifica con `npx prisma migrate status`. |
 | `EADDRINUSE :3000` | El puerto está ocupado. Cierra el proceso anterior o cambia `PORT` en `.env`. |
 | `Can't reach database server` | Docker no está corriendo o no hiciste `npm run db:up`. |
 | `TLS handshake timeout` al hacer `docker compose` | Problema de red/proxy de Docker con Docker Hub. Reinicia Docker Desktop; revisa Settings → Resources → Proxies. |

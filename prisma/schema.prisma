@@ -53,6 +53,7 @@ model Contribuyente {
   planCuentas          PlanCuenta[]
   configsContables     ConfigCuentaContable[]
   asientos             Asiento[]
+  declaraciones        Declaracion[]
   ventas               Venta[]
   actividadesEconomicas ActividadEconomica[]
   impuestosMunicipales ImpuestoMunicipal[]
@@ -322,6 +323,14 @@ enum TipoRetencion {
   ISLR
 }
 
+/// Condición fiscal del sujeto retenido (ISLR): define tarifa y sustraendo (decreto 1.808).
+enum CondicionFiscal {
+  PNR // Persona Natural Residente
+  PNNR // Persona Natural No Residente
+  PJD // Persona Jurídica Domiciliada
+  PJND // Persona Jurídica No Domiciliada
+}
+
 /// Factura de compra registrada a un proveedor (genera IVA crédito, RN-011).
 model Compra {
   id                 String                 @id @default(uuid())
@@ -379,6 +388,8 @@ model ComprobanteRetencion {
   porcentaje           Decimal          @db.Decimal(5, 2)
   montoRetenido        Decimal          @map("monto_retenido") @db.Decimal(18, 2)
   conceptoIslr         String?          @map("concepto_islr") // solo ISLR
+  sustraendo           Decimal          @default(0) @db.Decimal(18, 2) // solo ISLR a personas naturales
+  condicionFiscal      CondicionFiscal? @map("condicion_fiscal") // solo ISLR (PNR/PNNR/PJD/PJND)
   fecha                DateTime         @db.Date
   hora                 String
   createdAt            DateTime         @default(now()) @map("created_at")
@@ -482,6 +493,34 @@ model AsientoLinea {
 
   @@index([asientoId])
   @@map("asiento_lineas")
+}
+
+enum EstadoDeclaracion {
+  PENDIENTE
+  DECLARADA
+  VERIFICADA
+}
+
+/// Declaración de un período (CT5/RN-108): prepara el paquete y lo marca como declarado.
+/// NO declara ante el SENIAT (eso es manual en el portal); guarda el snapshot inmutable.
+model Declaracion {
+  id                String            @id @default(uuid())
+  contribuyenteId   String            @map("contribuyente_id")
+  contribuyente     Contribuyente     @relation(fields: [contribuyenteId], references: [id])
+  tipo              TipoRetencion // IVA (ISLR a futuro)
+  periodo           String // "2026-06"
+  debitoFiscal      Decimal           @map("debito_fiscal") @db.Decimal(18, 2)
+  creditoFiscal     Decimal           @map("credito_fiscal") @db.Decimal(18, 2)
+  retenciones       Decimal           @db.Decimal(18, 2)
+  montoADeclarar    Decimal           @map("monto_a_declarar") @db.Decimal(18, 2)
+  estado            EstadoDeclaracion @default(DECLARADA)
+  paquete           Json // snapshot de los libros/resumen al momento de declarar
+  referencia        String? // nro de comprobante/planilla del portal (si lo cargan)
+  fechaDeclaracion  DateTime          @default(now()) @map("fecha_declaracion")
+
+  @@unique([contribuyenteId, tipo, periodo])
+  @@index([contribuyenteId])
+  @@map("declaraciones")
 }
 
 // ──────────────────────────────────────────────────────────────

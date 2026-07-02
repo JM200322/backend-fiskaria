@@ -72,13 +72,14 @@ export function construirPayloadRetencionIva(
   };
 }
 
-/** Retención de ISLR. `base` imponible; `montoRetenido` = base × %. */
+/** Retención de ISLR. `montoRetenido` = base × % − sustraendo (decreto 1.808). */
 export function construirPayloadRetencionIslr(
   d: DatosRetencionImprenta & {
     totalFactura: number;
     base: number;
     porcentaje: number;
     montoRetenido: number;
+    sustraendo: number;
     concepto: string;
     retentionCode: string;
   },
@@ -92,7 +93,7 @@ export function construirPayloadRetencionIslr(
     ...partes(d.beneficiario, d.agente),
     withholding_base: d.base,
     amount_withheld: d.montoRetenido,
-    amount_subtracting: 0,
+    amount_subtracting: d.sustraendo,
     islr_voucher_elements: [
       {
         fac_date: formatearFechaImprenta(d.facDate),
@@ -102,7 +103,7 @@ export function construirPayloadRetencionIslr(
         payment_concept: d.concepto,
         fac_total_ammount: d.totalFactura,
         retention_amount: d.montoRetenido,
-        subtracting_amount: 0,
+        subtracting_amount: d.sustraendo,
         portion_percentage: `${d.porcentaje}%`,
       },
     ],

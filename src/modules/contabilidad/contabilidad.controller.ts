@@ -4,8 +4,14 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { RequierePermisos } from '../auth/decorators/require-permisos.decorator';
 import { AuthenticatedUser } from '../auth/types/authenticated-user';
 import { ContabilidadService } from './contabilidad.service';
+import { DeclaracionesService } from './declaraciones.service';
 import { LibrosService } from './libros.service';
-import { ConfigCuentaDto, CrearAsientoDto, CrearCuentaDto } from './dto/contabilidad.dto';
+import {
+  ConfigCuentaDto,
+  CrearAsientoDto,
+  CrearCuentaDto,
+  DeclararIvaDto,
+} from './dto/contabilidad.dto';
 
 @ApiTags('contabilidad')
 @ApiBearerAuth()
@@ -14,6 +20,7 @@ export class ContabilidadController {
   constructor(
     private readonly contabilidad: ContabilidadService,
     private readonly libros: LibrosService,
+    private readonly declaraciones: DeclaracionesService,
   ) {}
 
   // Plan de cuentas
@@ -103,5 +110,30 @@ export class ContabilidadController {
     @Query('month') month: string,
   ) {
     return this.libros.resumenIva(actor, Number(year), Number(month));
+  }
+
+  @Post('declaraciones/iva/declarar')
+  @RequierePermisos('contabilidad:cerrar_periodo')
+  @ApiOperation({ summary: 'Declarar el período de IVA: congela el paquete y lo marca DECLARADA (no declara ante SENIAT)' })
+  declararIva(
+    @Body() dto: DeclararIvaDto,
+    @CurrentUser() actor: AuthenticatedUser,
+    @Ip() ip: string,
+  ) {
+    return this.declaraciones.declararIva(dto.year, dto.month, actor, ip, dto.referencia);
+  }
+
+  @Get('declaraciones')
+  @RequierePermisos('contabilidad:ver')
+  @ApiOperation({ summary: 'Listar declaraciones realizadas (sin el paquete)' })
+  listarDeclaraciones(@CurrentUser() actor: AuthenticatedUser) {
+    return this.declaraciones.listar(actor);
+  }
+
+  @Get('declaraciones/:id')
+  @RequierePermisos('contabilidad:ver')
+  @ApiOperation({ summary: 'Detalle de una declaración (incluye el snapshot del paquete)' })
+  obtenerDeclaracion(@Param('id') id: string, @CurrentUser() actor: AuthenticatedUser) {
+    return this.declaraciones.obtener(id, actor);
   }
 }
