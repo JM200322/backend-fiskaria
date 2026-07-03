@@ -37,6 +37,18 @@ const ETIQUETA_PAGO: Record<MetodoPagoDto, string> = {
   TARJETA: 'Tarjeta',
 };
 
+/**
+ * Cuenta contable (evento) por método de pago (RN-107 / tabla del Facturador en el SDD).
+ * Cada método golpea una cuenta distinta; el pago mixto reparte cada parte a la suya.
+ * Nombres de evento provisionales hasta la tabla definitiva del contador.
+ */
+const EVENTO_PAGO: Record<MetodoPago, string> = {
+  EFECTIVO_BS: 'caja_efectivo', // 1.1.1.01 Caja
+  DIVISAS: 'caja_divisas', // 1.1.1.03 Caja Divisas
+  PAGO_MOVIL: 'banco_pago_movil', // 1.1.2.01 Bancos
+  TARJETA: 'cxc_pos', // 1.1.2.02 CxC POS
+};
+
 const incluir = { items: true, pagos: true, cliente: { select: { rif: true, nombre: true } } };
 
 @Injectable()
@@ -175,21 +187,9 @@ export class FacturadorService {
       return doc;
     });
 
-    // 7. Libro Diario (RN-107): asiento automático, best-effort — nunca bloquea la venta.
-    await this.contabilidad.registrarAutomatico({
-      contribuyenteId,
-      fecha: ahora,
-      glosa: `Venta ${creado.docNum}`,
-      documentoRef: creado.id,
-      lineas: [
-        { evento: 'caja_banco', debe: redondear(new Decimal(calc.total).plus(igtf)) },
-        { evento: 'venta_ingreso', haber: calc.subtotal },
-        { evento: 'iva_debito', haber: calc.totalIva },
-        { evento: 'igtf', haber: igtf },
-      ],
-    });
-
-    // 8. Transmisión a la Imprenta Digital (fuera de la transacción para no retener locks).
+    // 7. Transmisión a la Imprenta Digital (fuera de la transacción para no retener locks).
+    // El asiento contable (Libro Diario) se genera dentro de transmitir(), SOLO cuando el
+    // documento queda ENVIADO — así el Libro Diario cuadra con el Libro de Ventas (RN-011/107).
     return this.transmitir(creado.id, actor, ip);
   }
 
@@ -405,6 +405,44 @@ export class FacturadorService {
     return this.transmitir(creado.id, actor, ip);
   }
 
+  /**
+   * Asiento automático de una venta (RN-107). Una línea al debe por cada pago (cuenta según
+   * el método), el IGTF cobrado en divisas, y al haber el ingreso + IVA débito. Se arma con
+   * los datos PERSISTIDOS, por lo que funciona igual en la emisión y en el reproceso.
+   */
+  private async postearAsientoVenta(doc: {
+    id: string;
+    contribuyenteId: string;
+    docNum: string;
+    fecha: Date;
+    subtotal: Prisma.Decimal;
+    totalTax: Prisma.Decimal;
+    igtf: Prisma.Decimal;
+    pagos: { metodo: MetodoPago; monto: Prisma.Decimal }[];
+  }) {
+    const lineas: { evento: string; debe?: Decimal.Value; haber?: Decimal.Value }[] = [];
+    // Debe: cada pago a la cuenta de su método (pago mixto se reparte).
+    for (const p of doc.pagos) {
+      lineas.push({ evento: EVENTO_PAGO[p.metodo], debe: p.monto });
+    }
+    // IGTF cobrado en divisas: debe en caja divisas, haber en IGTF por pagar.
+    if (new Decimal(doc.igtf).gt(0)) {
+      lineas.push({ evento: EVENTO_PAGO.DIVISAS, debe: doc.igtf });
+      lineas.push({ evento: 'igtf', haber: doc.igtf });
+    }
+    // Haber: ingreso por ventas + IVA débito fiscal.
+    lineas.push({ evento: 'venta_ingreso', haber: doc.subtotal });
+    lineas.push({ evento: 'iva_debito', haber: doc.totalTax });
+
+    await this.contabilidad.registrarAutomatico({
+      contribuyenteId: doc.contribuyenteId,
+      fecha: doc.fecha,
+      glosa: `Venta ${doc.docNum}`,
+      documentoRef: doc.id,
+      lineas,
+    });
+  }
+
   /** Productos → líneas (con alícuota por categoría fiscal/override) + cálculo fiscal. */
   private async prepararLineas(items: ItemFacturaDto[], contribuyenteId: string) {
     const productos = await this.prisma.producto.findMany({
@@ -550,6 +588,13 @@ export class FacturadorService {
         data: { numeroControl: resp.numeroControl, estatus: EstatusDocumento.ENVIADO },
         include: incluir,
       });
+
+      // Libro Diario (RN-107): el asiento de venta se genera SOLO al quedar ENVIADO, para
+      // que cuadre con el Libro de Ventas. Best-effort — nunca revierte la emisión.
+      if (doc.tipo === TipoDocumento.FACTURA) {
+        await this.postearAsientoVenta(doc);
+      }
+
       await this.audit(
         actor,
         ip,
