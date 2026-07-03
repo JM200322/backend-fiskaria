@@ -187,9 +187,14 @@ export class FacturadorService {
       return doc;
     });
 
-    // 7. Transmisión a la Imprenta Digital (fuera de la transacción para no retener locks).
-    // El asiento contable (Libro Diario) se genera dentro de transmitir(), SOLO cuando el
-    // documento queda ENVIADO — así el Libro Diario cuadra con el Libro de Ventas (RN-011/107).
+    // 7. Asiento contable de la venta (Libro Diario, RN-107). En el MVP la Imprenta Digital
+    // aún no está conectada, así que el asiento se genera al EMITIR — NO se condiciona a que
+    // el documento quede ENVIADO (si no, el Libro Diario quedaría vacío). Best-effort: nunca
+    // revierte la emisión. TODO: al integrar la imprenta real, mover a transmitir() si se
+    // requiere que el Libro Diario cuadre exactamente con las facturas efectivamente enviadas.
+    await this.postearAsientoVenta(creado);
+
+    // 8. Transmisión a la Imprenta Digital (fuera de la transacción para no retener locks).
     return this.transmitir(creado.id, actor, ip);
   }
 
@@ -407,8 +412,8 @@ export class FacturadorService {
 
   /**
    * Asiento automático de una venta (RN-107). Una línea al debe por cada pago (cuenta según
-   * el método), el IGTF cobrado en divisas, y al haber el ingreso + IVA débito. Se arma con
-   * los datos PERSISTIDOS, por lo que funciona igual en la emisión y en el reproceso.
+   * el método), el IGTF cobrado en divisas, y al haber el ingreso + IVA débito. Se invoca al
+   * EMITIR la factura (en el MVP la imprenta aún no está conectada, ver emitirFactura).
    */
   private async postearAsientoVenta(doc: {
     id: string;
@@ -588,12 +593,6 @@ export class FacturadorService {
         data: { numeroControl: resp.numeroControl, estatus: EstatusDocumento.ENVIADO },
         include: incluir,
       });
-
-      // Libro Diario (RN-107): el asiento de venta se genera SOLO al quedar ENVIADO, para
-      // que cuadre con el Libro de Ventas. Best-effort — nunca revierte la emisión.
-      if (doc.tipo === TipoDocumento.FACTURA) {
-        await this.postearAsientoVenta(doc);
-      }
 
       await this.audit(
         actor,
