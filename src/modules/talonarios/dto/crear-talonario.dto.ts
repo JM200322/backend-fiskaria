@@ -6,7 +6,7 @@ const SECUENCIAL_MIN = 1;
 const SECUENCIAL_MAX = 99_999_999;
 
 export class CrearTalonarioDto {
-  @ApiProperty({ example: '01', description: 'Serie de 2 dígitos (máquina fiscal) — Providencia 00071' })
+  @ApiProperty({ example: '01', description: 'Serie de 2 dígitos del talonario autorizado por el SENIAT (Providencia 00071). NO es máquina fiscal ni numeración propia — es un rango de contingencia autorizado (compatible con RN-113).' })
   @IsString()
   @Matches(/^\d{2}$/, { message: 'serie debe ser de 2 dígitos, ej. "01"' })
   serie: string;
