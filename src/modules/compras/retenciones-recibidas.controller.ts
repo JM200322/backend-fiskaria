@@ -26,9 +26,16 @@ export class RetencionesRecibidasController {
 
   @Get()
   @RequierePermisos('compras:ver')
-  @ApiOperation({ summary: 'Listar retenciones recibidas' })
+  @ApiOperation({ summary: 'Listar retenciones recibidas (opcionalmente filtradas por período)' })
   @ApiQuery({ name: 'tipo', required: false, enum: TipoRetencion })
-  listar(@CurrentUser() actor: AuthenticatedUser, @Query('tipo') tipo?: TipoRetencion) {
-    return this.servicio.listar(actor, tipo);
+  @ApiQuery({ name: 'year', required: false, example: 2026 })
+  @ApiQuery({ name: 'month', required: false, example: 6 })
+  listar(
+    @CurrentUser() actor: AuthenticatedUser,
+    @Query('tipo') tipo?: TipoRetencion,
+    @Query('year') year?: string,
+    @Query('month') month?: string,
+  ) {
+    return this.servicio.listar(actor, tipo, year ? Number(year) : undefined, month ? Number(month) : undefined);
   }
 }

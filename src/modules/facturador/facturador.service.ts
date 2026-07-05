@@ -322,6 +322,7 @@ export class FacturadorService {
     const contribuyenteId = this.tenantId(actor);
     return this.prisma.documentoFiscal.findMany({
       where: { contribuyenteId, tipo: opts.tipo, estatus: opts.estatus },
+      include: incluir,
       orderBy: { createdAt: 'desc' },
       take: 100,
     });

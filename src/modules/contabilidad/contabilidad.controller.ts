@@ -112,6 +112,58 @@ export class ContabilidadController {
     return this.libros.resumenIva(actor, Number(year), Number(month));
   }
 
+  @Get('libros/diario')
+  @RequierePermisos('contabilidad:ver')
+  @ApiOperation({ summary: 'Libro Diario del período (Código de Comercio Art. 32)' })
+  @ApiQuery({ name: 'year', example: 2026 })
+  @ApiQuery({ name: 'month', example: 6 })
+  libroDiario(
+    @CurrentUser() actor: AuthenticatedUser,
+    @Query('year') year: string,
+    @Query('month') month: string,
+  ) {
+    return this.contabilidad.libroDiario(actor, Number(year), Number(month));
+  }
+
+  @Get('libros/mayor')
+  @RequierePermisos('contabilidad:ver')
+  @ApiOperation({ summary: 'Libro Mayor del período (Código de Comercio Art. 34)' })
+  @ApiQuery({ name: 'year', example: 2026 })
+  @ApiQuery({ name: 'month', example: 6 })
+  libroMayor(
+    @CurrentUser() actor: AuthenticatedUser,
+    @Query('year') year: string,
+    @Query('month') month: string,
+  ) {
+    return this.contabilidad.libroMayor(actor, Number(year), Number(month));
+  }
+
+  @Get('balance-general')
+  @RequierePermisos('contabilidad:ver')
+  @ApiOperation({ summary: 'Balance General (Libro de Inventarios y Balances, Art. 35)' })
+  @ApiQuery({ name: 'year', example: 2026 })
+  @ApiQuery({ name: 'month', example: 6 })
+  balanceGeneral(
+    @CurrentUser() actor: AuthenticatedUser,
+    @Query('year') year: string,
+    @Query('month') month: string,
+  ) {
+    return this.contabilidad.balanceGeneral(actor, Number(year), Number(month));
+  }
+
+  @Get('declaraciones/igtf')
+  @RequierePermisos('contabilidad:ver')
+  @ApiOperation({ summary: 'Resumen de IGTF del período (RN-010): 3% sobre pagos en divisas' })
+  @ApiQuery({ name: 'year', example: 2026 })
+  @ApiQuery({ name: 'month', example: 6 })
+  resumenIgtf(
+    @CurrentUser() actor: AuthenticatedUser,
+    @Query('year') year: string,
+    @Query('month') month: string,
+  ) {
+    return this.libros.resumenIgtf(actor, Number(year), Number(month));
+  }
+
   @Get('estado-resultados')
   @RequierePermisos('contabilidad:ver')
   @ApiOperation({ summary: 'Estado de Resultados del período (derivado del Libro Diario)' })

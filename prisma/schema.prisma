@@ -34,34 +34,35 @@ enum PeriodoIva {
 
 /// Comercio afiliado (el "tenant"). Su alta la realiza Sirumatek (RN-134).
 model Contribuyente {
-  id                 String             @id @default(uuid())
-  rif                String             @unique
-  razonSocial        String             @map("razon_social")
-  tipoContribuyente  TipoContribuyente  @default(ORDINARIO) @map("tipo_contribuyente")
-  agenteRetencion    Boolean            @default(false) @map("agente_retencion") // habilita retenciones (RN-129)
-  periodoIva         PeriodoIva?        @map("periodo_iva") // quincenal/mensual (RN-130)
-  domicilioFiscal      String?              @map("domicilio_fiscal")
-  validado             Boolean              @default(false) @map("validado") // vía API SENIAT (RN-101)
-  usuarios             Usuario[]
-  terceros             Tercero[]
-  productos            Producto[]
+  id                    String                 @id @default(uuid())
+  rif                   String                 @unique
+  razonSocial           String                 @map("razon_social")
+  tipoContribuyente     TipoContribuyente      @default(ORDINARIO) @map("tipo_contribuyente")
+  agenteRetencion       Boolean                @default(false) @map("agente_retencion") // habilita retenciones (RN-129)
+  periodoIva            PeriodoIva?            @map("periodo_iva") // quincenal/mensual (RN-130)
+  domicilioFiscal       String?                @map("domicilio_fiscal")
+  validado              Boolean                @default(false) @map("validado") // vía API SENIAT (RN-101)
+  usuarios              Usuario[]
+  terceros              Tercero[]
+  productos             Producto[]
+  movimientosInventario MovimientoInventario[]
   categoriasComerciales CategoriaComercial[]
-  puntosEmision        PuntoEmision[]
-  documentos           DocumentoFiscal[]
-  compras              Compra[]
-  retenciones          ComprobanteRetencion[]
-  planCuentas          PlanCuenta[]
-  configsContables     ConfigCuentaContable[]
-  asientos             Asiento[]
-  declaraciones        Declaracion[]
-  ventas               Venta[]
+  puntosEmision         PuntoEmision[]
+  documentos            DocumentoFiscal[]
+  compras               Compra[]
+  retenciones           ComprobanteRetencion[]
+  planCuentas           PlanCuenta[]
+  configsContables      ConfigCuentaContable[]
+  asientos              Asiento[]
+  declaraciones         Declaracion[]
+  ventas                Venta[]
   actividadesEconomicas ActividadEconomica[]
-  impuestosMunicipales ImpuestoMunicipal[]
-  retencionesRecibidas RetencionRecibida[]
-  auditoria            RegistroAuditoria[]
-  talonarios           TalonarioAutorizado[]
-  createdAt            DateTime             @default(now()) @map("created_at")
-  updatedAt            DateTime             @updatedAt @map("updated_at")
+  impuestosMunicipales  ImpuestoMunicipal[]
+  retencionesRecibidas  RetencionRecibida[]
+  auditoria             RegistroAuditoria[]
+  talonarios            TalonarioAutorizado[]
+  createdAt             DateTime               @default(now()) @map("created_at")
+  updatedAt             DateTime               @updatedAt @map("updated_at")
 
   @@map("contribuyentes")
 }
@@ -72,27 +73,27 @@ model Contribuyente {
 
 /// Un tercero puede ser cliente y/o proveedor a la vez (RN-104, no se duplica).
 model Tercero {
-  id              String        @id @default(uuid())
-  contribuyenteId String        @map("contribuyente_id")
-  contribuyente   Contribuyente @relation(fields: [contribuyenteId], references: [id])
-  rif             String
-  tipoId          String        @map("tipo_id") // J, V, E, G, P, C (letra del RIF)
-  nombre          String
-  direccion       String?
-  telefono        String?
-  email           String?
-  esCliente       Boolean             @default(true) @map("es_cliente")
-  esProveedor     Boolean             @default(false) @map("es_proveedor")
-  rifValidado     Boolean             @default(false) @map("rif_validado") // requerido para facturar (RN-008)
-  activo          Boolean             @default(true)
-  productos       ProductoProveedor[]
-  documentosCliente DocumentoFiscal[] @relation("ClienteDocumentos")
-  comprasProveedor  Compra[]          @relation("ProveedorCompras")
+  id                String                 @id @default(uuid())
+  contribuyenteId   String                 @map("contribuyente_id")
+  contribuyente     Contribuyente          @relation(fields: [contribuyenteId], references: [id])
+  rif               String
+  tipoId            String                 @map("tipo_id") // J, V, E, G, P, C (letra del RIF)
+  nombre            String
+  direccion         String?
+  telefono          String?
+  email             String?
+  esCliente         Boolean                @default(true) @map("es_cliente")
+  esProveedor       Boolean                @default(false) @map("es_proveedor")
+  rifValidado       Boolean                @default(false) @map("rif_validado") // requerido para facturar (RN-008)
+  activo            Boolean                @default(true)
+  productos         ProductoProveedor[]
+  documentosCliente DocumentoFiscal[]      @relation("ClienteDocumentos")
+  comprasProveedor  Compra[]               @relation("ProveedorCompras")
   retencionesBenef  ComprobanteRetencion[] @relation("BeneficiarioRetenciones")
-  ventas            Venta[]           @relation("VentasTercero")
-  createdAt       DateTime            @default(now()) @map("created_at")
-  updatedAt       DateTime            @updatedAt @map("updated_at")
-  deletedAt       DateTime?           @map("deleted_at")
+  ventas            Venta[]                @relation("VentasTercero")
+  createdAt         DateTime               @default(now()) @map("created_at")
+  updatedAt         DateTime               @updatedAt @map("updated_at")
+  deletedAt         DateTime?              @map("deleted_at")
 
   @@unique([contribuyenteId, rif]) // un RIF no se duplica dentro del comercio
   @@index([contribuyenteId])
@@ -107,6 +108,15 @@ enum TipoProducto {
   ALMACENABLE
   CONSUMIBLE
   SERVICIO
+}
+
+enum UnidadMedida {
+  UNID
+  KG
+  LT
+  CAJA
+  SACO
+  PAQ
 }
 
 /// Catálogo GLOBAL: determina la alícuota de IVA (RN-102). No lleva contribuyente.
@@ -134,31 +144,56 @@ model CategoriaComercial {
 }
 
 model Producto {
-  id                  String              @id @default(uuid())
-  contribuyenteId     String              @map("contribuyente_id")
-  contribuyente       Contribuyente       @relation(fields: [contribuyenteId], references: [id])
-  codigo              String
-  nombre              String
-  tipo                TipoProducto        @default(ALMACENABLE)
-  categoriaComercialId String?            @map("categoria_comercial_id")
-  categoriaComercial  CategoriaComercial? @relation(fields: [categoriaComercialId], references: [id])
-  categoriaFiscalId   String              @map("categoria_fiscal_id")
-  categoriaFiscal     CategoriaFiscal     @relation(fields: [categoriaFiscalId], references: [id])
-  ivaOverride         Decimal?            @map("iva_override") @db.Decimal(5, 2) // sobrescribe la alícuota de la categoría (RN-102)
-  precio              Decimal             @db.Decimal(18, 2)
-  stock               Decimal             @default(0) @db.Decimal(18, 3) // relevante solo si ALMACENABLE (RN-121)
-  stockMinimo         Decimal             @default(0) @map("stock_minimo") @db.Decimal(18, 3) // umbral de alerta
-  activo              Boolean             @default(true)
-  proveedores         ProductoProveedor[]
-  documentoItems      DocumentoItem[]
-  ventaItems          VentaItem[]
-  createdAt           DateTime            @default(now()) @map("created_at")
-  updatedAt           DateTime            @updatedAt @map("updated_at")
-  deletedAt           DateTime?           @map("deleted_at")
+  id                   String                 @id @default(uuid())
+  contribuyenteId      String                 @map("contribuyente_id")
+  contribuyente        Contribuyente          @relation(fields: [contribuyenteId], references: [id])
+  codigo               String
+  nombre               String
+  tipo                 TipoProducto           @default(ALMACENABLE)
+  categoriaComercialId String?                @map("categoria_comercial_id")
+  categoriaComercial   CategoriaComercial?    @relation(fields: [categoriaComercialId], references: [id])
+  categoriaFiscalId    String                 @map("categoria_fiscal_id")
+  categoriaFiscal      CategoriaFiscal        @relation(fields: [categoriaFiscalId], references: [id])
+  ivaOverride          Decimal?               @map("iva_override") @db.Decimal(5, 2) // sobrescribe la alícuota de la categoría (RN-102)
+  precio               Decimal                @db.Decimal(18, 2)
+  stock                Decimal                @default(0) @db.Decimal(18, 3) // relevante solo si ALMACENABLE (RN-121)
+  stockMinimo          Decimal                @default(0) @map("stock_minimo") @db.Decimal(18, 3) // umbral de alerta
+  costoUltimo          Decimal?               @map("costo_ultimo") @db.Decimal(18, 2) // costo de la última reposición (base para margen y COGS)
+  codigoBarras         String?                @map("codigo_barras")
+  lote                 String?
+  unidadMedida         UnidadMedida?          @map("unidad_medida")
+  imagenUrl            String?                @map("imagen_url") // ruta pública servida por /uploads — set solo vía POST /productos/:id/imagen
+  activo               Boolean                @default(true)
+  proveedores          ProductoProveedor[]
+  documentoItems       DocumentoItem[]
+  ventaItems           VentaItem[]
+  movimientos          MovimientoInventario[]
+  createdAt            DateTime               @default(now()) @map("created_at")
+  updatedAt            DateTime               @updatedAt @map("updated_at")
+  deletedAt            DateTime?              @map("deleted_at")
 
   @@unique([contribuyenteId, codigo])
   @@index([contribuyenteId])
   @@map("productos")
+}
+
+/// Historial de reposiciones de stock (entradas de inventario) — alimenta costoUltimo y el asiento automático.
+model MovimientoInventario {
+  id              String        @id @default(uuid())
+  contribuyenteId String        @map("contribuyente_id")
+  contribuyente   Contribuyente @relation(fields: [contribuyenteId], references: [id])
+  productoId      String        @map("producto_id")
+  producto        Producto      @relation(fields: [productoId], references: [id])
+  cantidad        Decimal       @db.Decimal(18, 3)
+  costoUnitario   Decimal       @map("costo_unitario") @db.Decimal(18, 2)
+  costoTotal      Decimal       @map("costo_total") @db.Decimal(18, 2)
+  ivaCredito      Decimal       @default(0) @map("iva_credito") @db.Decimal(18, 2)
+  referencia      String?
+  fecha           DateTime      @default(now())
+  createdAt       DateTime      @default(now()) @map("created_at")
+
+  @@index([contribuyenteId, productoId])
+  @@map("movimientos_inventario")
 }
 
 /// Relación N:M producto ↔ proveedor (Tercero) — RN-104.
@@ -257,37 +292,37 @@ enum MetodoPago {
 
 /// Documento fiscal (Factura, NC, ND, Guía…). Append-only: no se edita ni borra (RN-001).
 model DocumentoFiscal {
-  id              String           @id @default(uuid())
-  contribuyenteId String           @map("contribuyente_id")
-  contribuyente   Contribuyente    @relation(fields: [contribuyenteId], references: [id])
-  puntoEmisionId  String           @map("punto_emision_id")
-  puntoEmision    PuntoEmision     @relation(fields: [puntoEmisionId], references: [id])
-  tipo            TipoDocumento
-  docNum          String           @map("doc_num") // correlativo interno (Fiskaria)
-  numeroControl   String?          @map("numero_control") // lo asigna la imprenta (RN-007)
-  estatus         EstatusDocumento @default(NO_ENVIADO)
-  clienteTerceroId String          @map("cliente_tercero_id")
-  cliente         Tercero          @relation("ClienteDocumentos", fields: [clienteTerceroId], references: [id])
-  documentoOrigenId String?        @map("documento_origen_id")
-  documentoOrigen DocumentoFiscal? @relation("Reverso", fields: [documentoOrigenId], references: [id])
-  reversos        DocumentoFiscal[] @relation("Reverso")
-  reasonTo        String?          @map("reason_to")
-  fecha           DateTime         @db.Date
-  hora            String // HH:MM:SS
-  paymentMethod   String           @map("payment_method")
-  currency        String           @default("VES")
-  subtotal        Decimal          @db.Decimal(18, 2)
-  totalTax        Decimal          @map("total_tax") @db.Decimal(18, 2)
-  totalWTaxes     Decimal          @map("total_w_taxes") @db.Decimal(18, 2)
-  igtf            Decimal          @default(0) @db.Decimal(18, 2)
-  tasaBcv         Decimal          @map("tasa_bcv") @db.Decimal(18, 6) // tasa usada (RN-118)
-  tasaMoneda      String           @default("USD") @map("tasa_moneda")
-  desgloseIva     Json             @map("desglose_iva")
-  thirdParty      Json?            @map("third_party")
-  datosEnvio      Json?            @map("datos_envio") // guía de despacho: conductor, vehículo, direcciones
-  items           DocumentoItem[]
-  pagos           PagoDocumento[]
-  createdAt       DateTime         @default(now()) @map("created_at")
+  id                String            @id @default(uuid())
+  contribuyenteId   String            @map("contribuyente_id")
+  contribuyente     Contribuyente     @relation(fields: [contribuyenteId], references: [id])
+  puntoEmisionId    String            @map("punto_emision_id")
+  puntoEmision      PuntoEmision      @relation(fields: [puntoEmisionId], references: [id])
+  tipo              TipoDocumento
+  docNum            String            @map("doc_num") // correlativo interno (Fiskaria)
+  numeroControl     String?           @map("numero_control") // lo asigna la imprenta (RN-007)
+  estatus           EstatusDocumento  @default(NO_ENVIADO)
+  clienteTerceroId  String            @map("cliente_tercero_id")
+  cliente           Tercero           @relation("ClienteDocumentos", fields: [clienteTerceroId], references: [id])
+  documentoOrigenId String?           @map("documento_origen_id")
+  documentoOrigen   DocumentoFiscal?  @relation("Reverso", fields: [documentoOrigenId], references: [id])
+  reversos          DocumentoFiscal[] @relation("Reverso")
+  reasonTo          String?           @map("reason_to")
+  fecha             DateTime          @db.Date
+  hora              String // HH:MM:SS
+  paymentMethod     String            @map("payment_method")
+  currency          String            @default("VES")
+  subtotal          Decimal           @db.Decimal(18, 2)
+  totalTax          Decimal           @map("total_tax") @db.Decimal(18, 2)
+  totalWTaxes       Decimal           @map("total_w_taxes") @db.Decimal(18, 2)
+  igtf              Decimal           @default(0) @db.Decimal(18, 2)
+  tasaBcv           Decimal           @map("tasa_bcv") @db.Decimal(18, 6) // tasa usada (RN-118)
+  tasaMoneda        String            @default("USD") @map("tasa_moneda")
+  desgloseIva       Json              @map("desglose_iva")
+  thirdParty        Json?             @map("third_party")
+  datosEnvio        Json?             @map("datos_envio") // guía de despacho: conductor, vehículo, direcciones
+  items             DocumentoItem[]
+  pagos             PagoDocumento[]
+  createdAt         DateTime          @default(now()) @map("created_at")
 
   @@unique([contribuyenteId, tipo, puntoEmisionId, docNum]) // RN-128
   @@index([contribuyenteId])
@@ -391,30 +426,30 @@ model PagoProveedor {
 
 /// Comprobante de Retención (IVA/ISLR) emitido por la imprenta. Inmutable (RN-132).
 model ComprobanteRetencion {
-  id                   String           @id @default(uuid())
-  contribuyenteId      String           @map("contribuyente_id")
-  contribuyente        Contribuyente    @relation(fields: [contribuyenteId], references: [id])
-  compraId             String?          @map("compra_id")
-  compra               Compra?          @relation(fields: [compraId], references: [id])
-  tipo                 TipoRetencion
-  docNum               String           @map("doc_num")
-  numeroControl        String?          @map("numero_control") // lo asigna la imprenta
-  estatus              EstatusDocumento @default(NO_ENVIADO)
-  periodoYear          String           @map("periodo_year")
-  periodoMonth         String           @map("periodo_month")
-  beneficiarioTerceroId String          @map("beneficiario_tercero_id")
-  beneficiario         Tercero          @relation("BeneficiarioRetenciones", fields: [beneficiarioTerceroId], references: [id])
-  facDocumentNum       String           @map("fac_document_num") // factura referenciada (RN-127)
-  facControlNum        String           @map("fac_control_num")
-  base                 Decimal          @db.Decimal(18, 2)
-  porcentaje           Decimal          @db.Decimal(5, 2)
-  montoRetenido        Decimal          @map("monto_retenido") @db.Decimal(18, 2)
-  conceptoIslr         String?          @map("concepto_islr") // solo ISLR
-  sustraendo           Decimal          @default(0) @db.Decimal(18, 2) // solo ISLR a personas naturales
-  condicionFiscal      CondicionFiscal? @map("condicion_fiscal") // solo ISLR (PNR/PNNR/PJD/PJND)
-  fecha                DateTime         @db.Date
-  hora                 String
-  createdAt            DateTime         @default(now()) @map("created_at")
+  id                    String           @id @default(uuid())
+  contribuyenteId       String           @map("contribuyente_id")
+  contribuyente         Contribuyente    @relation(fields: [contribuyenteId], references: [id])
+  compraId              String?          @map("compra_id")
+  compra                Compra?          @relation(fields: [compraId], references: [id])
+  tipo                  TipoRetencion
+  docNum                String           @map("doc_num")
+  numeroControl         String?          @map("numero_control") // lo asigna la imprenta
+  estatus               EstatusDocumento @default(NO_ENVIADO)
+  periodoYear           String           @map("periodo_year")
+  periodoMonth          String           @map("periodo_month")
+  beneficiarioTerceroId String           @map("beneficiario_tercero_id")
+  beneficiario          Tercero          @relation("BeneficiarioRetenciones", fields: [beneficiarioTerceroId], references: [id])
+  facDocumentNum        String           @map("fac_document_num") // factura referenciada (RN-127)
+  facControlNum         String           @map("fac_control_num")
+  base                  Decimal          @db.Decimal(18, 2)
+  porcentaje            Decimal          @db.Decimal(5, 2)
+  montoRetenido         Decimal          @map("monto_retenido") @db.Decimal(18, 2)
+  conceptoIslr          String?          @map("concepto_islr") // solo ISLR
+  sustraendo            Decimal          @default(0) @db.Decimal(18, 2) // solo ISLR a personas naturales
+  condicionFiscal       CondicionFiscal? @map("condicion_fiscal") // solo ISLR (PNR/PNNR/PJD/PJND)
+  fecha                 DateTime         @db.Date
+  hora                  String
+  createdAt             DateTime         @default(now()) @map("created_at")
 
   @@unique([contribuyenteId, tipo, docNum])
   @@index([contribuyenteId])
@@ -526,19 +561,19 @@ enum EstadoDeclaracion {
 /// Declaración de un período (CT5/RN-108): prepara el paquete y lo marca como declarado.
 /// NO declara ante el SENIAT (eso es manual en el portal); guarda el snapshot inmutable.
 model Declaracion {
-  id                String            @id @default(uuid())
-  contribuyenteId   String            @map("contribuyente_id")
-  contribuyente     Contribuyente     @relation(fields: [contribuyenteId], references: [id])
-  tipo              TipoRetencion // IVA (ISLR a futuro)
-  periodo           String // "2026-06"
-  debitoFiscal      Decimal           @map("debito_fiscal") @db.Decimal(18, 2)
-  creditoFiscal     Decimal           @map("credito_fiscal") @db.Decimal(18, 2)
-  retenciones       Decimal           @db.Decimal(18, 2)
-  montoADeclarar    Decimal           @map("monto_a_declarar") @db.Decimal(18, 2)
-  estado            EstadoDeclaracion @default(DECLARADA)
-  paquete           Json // snapshot de los libros/resumen al momento de declarar
-  referencia        String? // nro de comprobante/planilla del portal (si lo cargan)
-  fechaDeclaracion  DateTime          @default(now()) @map("fecha_declaracion")
+  id               String            @id @default(uuid())
+  contribuyenteId  String            @map("contribuyente_id")
+  contribuyente    Contribuyente     @relation(fields: [contribuyenteId], references: [id])
+  tipo             TipoRetencion // IVA (ISLR a futuro)
+  periodo          String // "2026-06"
+  debitoFiscal     Decimal           @map("debito_fiscal") @db.Decimal(18, 2)
+  creditoFiscal    Decimal           @map("credito_fiscal") @db.Decimal(18, 2)
+  retenciones      Decimal           @db.Decimal(18, 2)
+  montoADeclarar   Decimal           @map("monto_a_declarar") @db.Decimal(18, 2)
+  estado           EstadoDeclaracion @default(DECLARADA)
+  paquete          Json // snapshot de los libros/resumen al momento de declarar
+  referencia       String? // nro de comprobante/planilla del portal (si lo cargan)
+  fechaDeclaracion DateTime          @default(now()) @map("fecha_declaracion")
 
   @@unique([contribuyenteId, tipo, periodo])
   @@index([contribuyenteId])
@@ -639,22 +674,23 @@ model ImpuestoMunicipal {
 
 /// Usuario del sistema. Pertenece a un Contribuyente (NULL = admin Sirumatek).
 model Usuario {
-  id               String              @id @default(uuid())
-  contribuyenteId  String?             @map("contribuyente_id")
-  contribuyente    Contribuyente?      @relation(fields: [contribuyenteId], references: [id])
-  email            String              @unique
-  emailAlternativo String?             @map("email_alternativo") // recuperación (RN-014)
-  passwordHash     String              @map("password_hash")
-  passwordTemporal Boolean             @default(false) @map("password_temporal") // fuerza cambio (RN-014)
-  nombre           String
-  activo           Boolean             @default(true)
-  ultimoAcceso     DateTime?           @map("ultimo_acceso")
-  roles            UsuarioRol[]
-  refreshTokens    RefreshToken[]
-  auditoria        RegistroAuditoria[]
-  createdAt        DateTime            @default(now()) @map("created_at")
-  updatedAt        DateTime            @updatedAt @map("updated_at")
-  deletedAt        DateTime?           @map("deleted_at")
+  id                   String               @id @default(uuid())
+  contribuyenteId      String?              @map("contribuyente_id")
+  contribuyente        Contribuyente?       @relation(fields: [contribuyenteId], references: [id])
+  email                String               @unique
+  emailAlternativo     String?              @map("email_alternativo") // recuperación (RN-014)
+  passwordHash         String               @map("password_hash")
+  passwordTemporal     Boolean              @default(false) @map("password_temporal") // fuerza cambio (RN-014)
+  nombre               String
+  activo               Boolean              @default(true)
+  ultimoAcceso         DateTime?            @map("ultimo_acceso")
+  roles                UsuarioRol[]
+  refreshTokens        RefreshToken[]
+  credencialesWebAuthn CredencialWebAuthn[]
+  auditoria            RegistroAuditoria[]
+  createdAt            DateTime             @default(now()) @map("created_at")
+  updatedAt            DateTime             @updatedAt @map("updated_at")
+  deletedAt            DateTime?            @map("deleted_at")
 
   @@index([contribuyenteId])
   @@map("usuarios")
@@ -720,6 +756,37 @@ model RefreshToken {
 
   @@index([usuarioId])
   @@map("refresh_tokens")
+}
+
+/// Credencial WebAuthn (passkey) enrolada por el usuario: huella/Face ID/Windows Hello.
+/// counter detecta clonación de authenticator (debe crecer estrictamente en cada uso).
+model CredencialWebAuthn {
+  id           String    @id @default(uuid())
+  usuarioId    String    @map("usuario_id")
+  usuario      Usuario   @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+  credentialId String    @unique @map("credential_id")
+  publicKey    Bytes     @map("public_key")
+  counter      BigInt    @default(0)
+  deviceLabel  String?   @map("device_label")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  lastUsedAt   DateTime? @map("last_used_at")
+
+  @@index([usuarioId])
+  @@map("credenciales_webauthn")
+}
+
+/// Challenge efímero de una ceremonia WebAuthn (registro o login) mientras el
+/// navegador consulta al authenticator. usuarioId es null en login sin
+/// username (discoverable credential): el challenge no está atado a nadie
+/// hasta que la respuesta llega y se resuelve por credentialId.
+model WebAuthnChallenge {
+  id        String   @id @default(uuid())
+  usuarioId String?  @map("usuario_id")
+  challenge String
+  expiraEn  DateTime @map("expira_en")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("webauthn_challenges")
 }
 
 // ──────────────────────────────────────────────────────────────

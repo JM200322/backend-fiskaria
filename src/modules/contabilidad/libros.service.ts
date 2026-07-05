@@ -54,6 +54,10 @@ export class LibrosService {
       exentasTotal = exentasTotal.plus(exenta);
       const montoTotal = new Decimal(d.totalWTaxes).times(signo);
       montoTotalGeneral = montoTotalGeneral.plus(montoTotal);
+      const baseImponible = Object.values(porAlicuota)
+        .reduce((acc, b) => acc.plus(b.base), new Decimal(0))
+        .plus(exenta);
+      const totalIva = Object.values(porAlicuota).reduce((acc, b) => acc.plus(b.iva), new Decimal(0));
 
       return {
         nroOperacion: i + 1,
@@ -68,6 +72,8 @@ export class LibrosService {
         montoTotal: montoTotal.toFixed(2),
         exentas: exenta.toFixed(2),
         exportaciones: '0.00', // no se manejan exportaciones (fuera de alcance)
+        baseImponible: baseImponible.toFixed(2),
+        totalIva: totalIva.toFixed(2),
         porAlicuota,
       };
     });
@@ -150,6 +156,8 @@ export class LibrosService {
         tipoTransaccion: '01-Reg',
         totalCompras: c.total.toString(),
         exentas: alic === '0' ? base.toFixed(2) : '0.00',
+        baseImponible: base.toFixed(2),
+        totalIva: iva.toFixed(2),
         porAlicuota,
         retencionIva: ret
           ? { monto: ret.montoRetenido.toString(), comprobante: ret.docNum, fecha: ret.fecha }
@@ -186,6 +194,29 @@ export class LibrosService {
       creditoFiscal: credito.toFixed(2),
       retencionesIva: retIva.toFixed(2),
       montoADeclarar: montoADeclarar.toFixed(2),
+    };
+  }
+
+  /** Resumen de IGTF del período (RN-010): 3% ya calculado y persistido por documento. */
+  async resumenIgtf(actor: AuthenticatedUser, year: number, month: number) {
+    const contribuyenteId = this.tenantId(actor);
+    const { desde, hasta } = this.rango(year, month);
+
+    const docs = await this.prisma.documentoFiscal.findMany({
+      where: {
+        contribuyenteId,
+        estatus: EstatusDocumento.ENVIADO,
+        fecha: { gte: desde, lt: hasta },
+        igtf: { gt: 0 },
+      },
+      select: { igtf: true },
+    });
+
+    const total = docs.reduce((acc, d) => acc.plus(d.igtf), new Decimal(0));
+    return {
+      periodo: `${year}-${String(month).padStart(2, '0')}`,
+      totalIgtf: total.toFixed(2),
+      operaciones: docs.length,
     };
   }
 

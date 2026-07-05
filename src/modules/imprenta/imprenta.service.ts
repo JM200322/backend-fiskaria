@@ -67,6 +67,68 @@ export class ImprentaService {
     return this.post('/generateShippingOrder', payload);
   }
 
+  /** Comprueba si la imprenta Sirumatek está alcanzable (para el indicador del facturador). */
+  async verificarConexion() {
+    const mock = this.config.get<boolean>('imprenta.mock');
+    const base = this.config.get<string>('imprenta.baseUrl');
+    const verificadoEn = new Date().toISOString();
+
+    if (mock) {
+      return {
+        estado: 'mock' as const,
+        mock: true,
+        mensaje: 'Modo simulación activo (sin enlace con Sirumatek)',
+        verificadoEn,
+      };
+    }
+
+    if (!base) {
+      return {
+        estado: 'unconfigured' as const,
+        mock: false,
+        mensaje: 'IMPRENTA_BASE_URL no configurada en el servidor',
+        verificadoEn,
+      };
+    }
+
+    const timeoutMs = Math.min(this.config.get<number>('imprenta.timeoutMs') ?? 10000, 5000);
+    const inicio = Date.now();
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+    try {
+      const res = await fetch(base, { method: 'GET', signal: controller.signal });
+      const latenciaMs = Date.now() - inicio;
+
+      if (res.ok || res.status < 500) {
+        return {
+          estado: 'connected' as const,
+          mock: false,
+          mensaje: 'Imprenta Sirumatek responde',
+          verificadoEn,
+          latenciaMs,
+        };
+      }
+
+      return {
+        estado: 'degraded' as const,
+        mock: false,
+        mensaje: `Imprenta respondió HTTP ${res.status}`,
+        verificadoEn,
+        latenciaMs,
+      };
+    } catch {
+      return {
+        estado: 'offline' as const,
+        mock: false,
+        mensaje: 'No se pudo contactar la imprenta Sirumatek',
+        verificadoEn,
+      };
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   /** Simulación común (dev): falla si el RIF del cliente contiene "999". */
   private simular(docNum: string, clientIdNum?: string): ImprentaRespuesta {
     if (clientIdNum?.includes('999')) {

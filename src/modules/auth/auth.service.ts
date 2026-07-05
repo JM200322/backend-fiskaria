@@ -178,8 +178,8 @@ export class AuthService {
     return { mensaje: 'Sesión cerrada' };
   }
 
-  /** Genera access + refresh tokens y persiste el hash del refresh. */
-  private async emitirTokens(usuarioId: string, email: string) {
+  /** Genera access + refresh tokens y persiste el hash del refresh. Público: lo reutiliza WebauthnService tras un login por passkey. */
+  async emitirTokens(usuarioId: string, email: string) {
     const accessToken = await this.jwt.signAsync(
       { sub: usuarioId, email },
       {

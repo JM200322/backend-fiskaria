@@ -277,6 +277,176 @@ export class ContabilidadService {
     };
   }
 
+  /**
+   * Libro Diario del período (Código de Comercio Art. 32): asientos en orden
+   * cronológico con sus líneas debe/haber. Fuente: Asiento/AsientoLinea, la
+   * misma que alimenta el Estado de Resultados — una sola fuente de verdad.
+   */
+  async libroDiario(actor: AuthenticatedUser, year: number, month: number) {
+    const contribuyenteId = this.tenantId(actor);
+    const { desde, hasta } = this.rango(year, month);
+
+    const asientos = await this.prisma.asiento.findMany({
+      where: { contribuyenteId, fecha: { gte: desde, lt: hasta } },
+      include: { lineas: { include: { cuenta: { select: { codigo: true, nombre: true } } } } },
+      orderBy: [{ fecha: 'asc' }, { createdAt: 'asc' }],
+    });
+
+    let totalDebe = new Decimal(0);
+    let totalHaber = new Decimal(0);
+    const filas = asientos.map((a, i) => {
+      const lineas = a.lineas.map((l) => ({
+        cuentaCodigo: l.cuenta.codigo,
+        cuentaNombre: l.cuenta.nombre,
+        debe: new Decimal(l.debe).toFixed(2),
+        haber: new Decimal(l.haber).toFixed(2),
+      }));
+      const debe = lineas.reduce((acc, l) => acc.plus(l.debe), new Decimal(0));
+      const haber = lineas.reduce((acc, l) => acc.plus(l.haber), new Decimal(0));
+      totalDebe = totalDebe.plus(debe);
+      totalHaber = totalHaber.plus(haber);
+      return {
+        nro: i + 1,
+        fecha: a.fecha,
+        glosa: a.glosa,
+        origen: a.origen,
+        lineas,
+        totalPartida: debe.toFixed(2),
+      };
+    });
+
+    return {
+      periodo: `${year}-${String(month).padStart(2, '0')}`,
+      asientos: filas,
+      totales: { debe: totalDebe.toFixed(2), haber: totalHaber.toFixed(2) },
+    };
+  }
+
+  /**
+   * Libro Mayor del período (Código de Comercio Art. 34): movimientos por
+   * cuenta con saldo inicial (arrastrado de asientos previos al período) y
+   * saldo corrido. Solo incluye cuentas con saldo inicial o movimiento —
+   * un plan de cuentas puede tener decenas de cuentas nunca usadas.
+   */
+  async libroMayor(actor: AuthenticatedUser, year: number, month: number) {
+    const contribuyenteId = this.tenantId(actor);
+    const { desde, hasta } = this.rango(year, month);
+
+    const [cuentas, previas, delPeriodo] = await Promise.all([
+      this.prisma.planCuenta.findMany({ where: { contribuyenteId }, orderBy: { codigo: 'asc' } }),
+      this.prisma.asientoLinea.findMany({
+        where: { asiento: { contribuyenteId, fecha: { lt: desde } } },
+        select: { cuentaId: true, debe: true, haber: true },
+      }),
+      this.prisma.asientoLinea.findMany({
+        where: { asiento: { contribuyenteId, fecha: { gte: desde, lt: hasta } } },
+        include: { asiento: { select: { fecha: true, glosa: true } } },
+        orderBy: [{ asiento: { fecha: 'asc' } }],
+      }),
+    ]);
+
+    const saldoInicialPorCuenta = new Map<string, Decimal>();
+    for (const l of previas) {
+      const acc = saldoInicialPorCuenta.get(l.cuentaId) ?? new Decimal(0);
+      saldoInicialPorCuenta.set(l.cuentaId, acc.plus(l.debe).minus(l.haber));
+    }
+    const movimientosPorCuenta = new Map<string, typeof delPeriodo>();
+    for (const l of delPeriodo) {
+      const arr = movimientosPorCuenta.get(l.cuentaId) ?? [];
+      arr.push(l);
+      movimientosPorCuenta.set(l.cuentaId, arr);
+    }
+
+    const filas = cuentas
+      .map((c) => {
+        const saldoInicial = saldoInicialPorCuenta.get(c.id) ?? new Decimal(0);
+        const movs = movimientosPorCuenta.get(c.id) ?? [];
+        if (movs.length === 0 && saldoInicial.isZero()) return null;
+
+        let saldo = saldoInicial;
+        const movimientos = movs.map((l) => {
+          saldo = saldo.plus(l.debe).minus(l.haber);
+          return {
+            fecha: l.asiento.fecha,
+            glosa: l.asiento.glosa,
+            debe: new Decimal(l.debe).toFixed(2),
+            haber: new Decimal(l.haber).toFixed(2),
+            saldo: saldo.toFixed(2),
+          };
+        });
+
+        return {
+          cuenta: { codigo: c.codigo, nombre: c.nombre, tipo: c.tipo },
+          saldoInicial: saldoInicial.toFixed(2),
+          movimientos,
+          saldoFinal: saldo.toFixed(2),
+        };
+      })
+      .filter((x): x is NonNullable<typeof x> => x !== null);
+
+    return { periodo: `${year}-${String(month).padStart(2, '0')}`, cuentas: filas };
+  }
+
+  /**
+   * Balance General (Libro de Inventarios y Balances, Código de Comercio
+   * Art. 35): saldos acumulados a la fecha de corte, por cuenta, agrupados en
+   * Activo/Pasivo/Patrimonio. La utilidad del ejercicio (aún no cerrada al
+   * Patrimonio) se suma como línea propia — es el mismo número que Estado de
+   * Resultados, no un cálculo paralelo.
+   */
+  async balanceGeneral(actor: AuthenticatedUser, year: number, month: number) {
+    const contribuyenteId = this.tenantId(actor);
+    const { hasta } = this.rango(year, month);
+
+    const [cuentas, lineas, resultado] = await Promise.all([
+      this.prisma.planCuenta.findMany({ where: { contribuyenteId }, orderBy: { codigo: 'asc' } }),
+      this.prisma.asientoLinea.findMany({
+        where: { asiento: { contribuyenteId, fecha: { lt: hasta } } },
+        select: { cuentaId: true, debe: true, haber: true },
+      }),
+      this.estadoResultados(actor, year, month),
+    ]);
+
+    const saldoPorCuenta = new Map<string, Decimal>();
+    for (const l of lineas) {
+      const acc = saldoPorCuenta.get(l.cuentaId) ?? new Decimal(0);
+      saldoPorCuenta.set(l.cuentaId, acc.plus(l.debe).minus(l.haber));
+    }
+
+    // Activo tiene saldo natural deudor; Pasivo/Patrimonio, acreedor (se invierte el signo).
+    const seccion = (tipo: TipoCuenta, invertir: boolean) =>
+      cuentas
+        .filter((c) => c.tipo === tipo)
+        .map((c) => {
+          const crudo = saldoPorCuenta.get(c.id) ?? new Decimal(0);
+          const saldo = invertir ? crudo.negated() : crudo;
+          return { codigo: c.codigo, nombre: c.nombre, saldo: saldo.toFixed(2) };
+        })
+        .filter((c) => !new Decimal(c.saldo).isZero());
+
+    const sum = (arr: { saldo: string }[]) =>
+      arr.reduce((acc, c) => acc.plus(c.saldo), new Decimal(0));
+
+    const activo = seccion(TipoCuenta.ACTIVO, false);
+    const pasivo = seccion(TipoCuenta.PASIVO, true);
+    const patrimonio = seccion(TipoCuenta.PATRIMONIO, true);
+    const utilidadEjercicio = new Decimal(resultado.utilidadNeta);
+    const totalPatrimonio = sum(patrimonio).plus(utilidadEjercicio);
+    const totalPasivo = sum(pasivo);
+
+    return {
+      periodo: resultado.periodo,
+      activo: { cuentas: activo, total: sum(activo).toFixed(2) },
+      pasivo: { cuentas: pasivo, total: totalPasivo.toFixed(2) },
+      patrimonio: {
+        cuentas: patrimonio,
+        utilidadEjercicio: utilidadEjercicio.toFixed(2),
+        total: totalPatrimonio.toFixed(2),
+      },
+      totalPasivoMasPatrimonio: totalPasivo.plus(totalPatrimonio).toFixed(2),
+    };
+  }
+
   private rango(year: number, month: number) {
     return {
       desde: new Date(Date.UTC(year, month - 1, 1)),

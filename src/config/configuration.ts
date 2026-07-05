@@ -36,6 +36,19 @@ export default () => ({
     .map((o) => o.trim())
     .filter(Boolean),
 
+  // Login biométrico (WebAuthn/passkeys). rpId es el hostname (sin protocolo/puerto)
+  // que sirve el frontend: DEBE ser estable, ya que una passkey queda atada a él.
+  // El túnel Cloudflare rota de hostname en cada reinicio, así que no sirve como
+  // rpId — las passkeys solo son utilizables en localhost hasta tener un dominio fijo.
+  webauthn: {
+    rpId: process.env.WEBAUTHN_RP_ID ?? 'localhost',
+    rpName: process.env.WEBAUTHN_RP_NAME ?? 'Fiskaria',
+    origin: (process.env.WEBAUTHN_ORIGIN ?? 'http://localhost:3001')
+      .split(',')
+      .map((o) => o.trim())
+      .filter(Boolean),
+  },
+
   // Rate limiting (configurable por entorno).
   throttle: {
     ttlMs: parseInt(process.env.THROTTLE_TTL_MS ?? '60000', 10),

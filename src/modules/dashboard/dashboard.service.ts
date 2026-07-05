@@ -22,18 +22,59 @@ export class DashboardService {
     const month = now.getUTCMonth() + 1;
     const desde = new Date(Date.UTC(year, month - 1, 1));
     const hasta = new Date(Date.UTC(year, month, 1));
+    const mesAnteriorDesde = new Date(Date.UTC(year, month - 2, 1));
 
-    // Ventas del mes (facturas emitidas).
-    const ventas = await this.prisma.documentoFiscal.aggregate({
-      where: {
-        contribuyenteId,
-        tipo: TipoDocumento.FACTURA,
-        estatus: EstatusDocumento.ENVIADO,
-        fecha: { gte: desde, lt: hasta },
-      },
-      _count: true,
-      _sum: { totalWTaxes: true },
-    });
+    // Ventas del mes (facturas emitidas) y del mes anterior (para el delta).
+    const [ventas, ventasMesAnterior] = await Promise.all([
+      this.prisma.documentoFiscal.aggregate({
+        where: {
+          contribuyenteId,
+          tipo: TipoDocumento.FACTURA,
+          estatus: EstatusDocumento.ENVIADO,
+          fecha: { gte: desde, lt: hasta },
+        },
+        _count: true,
+        _sum: { totalWTaxes: true },
+      }),
+      this.prisma.documentoFiscal.count({
+        where: {
+          contribuyenteId,
+          tipo: TipoDocumento.FACTURA,
+          estatus: EstatusDocumento.ENVIADO,
+          fecha: { gte: mesAnteriorDesde, lt: desde },
+        },
+      }),
+    ]);
+
+    // Ventas de hoy vs. ayer (para el hero).
+    const hoyInicio = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+    const hoyFin = new Date(hoyInicio.getTime() + 86_400_000);
+    const ayerInicio = new Date(hoyInicio.getTime() - 86_400_000);
+    const [ventasHoy, ventasAyer] = await Promise.all([
+      this.prisma.documentoFiscal.aggregate({
+        where: {
+          contribuyenteId,
+          tipo: TipoDocumento.FACTURA,
+          estatus: EstatusDocumento.ENVIADO,
+          fecha: { gte: hoyInicio, lt: hoyFin },
+        },
+        _sum: { totalWTaxes: true },
+      }),
+      this.prisma.documentoFiscal.aggregate({
+        where: {
+          contribuyenteId,
+          tipo: TipoDocumento.FACTURA,
+          estatus: EstatusDocumento.ENVIADO,
+          fecha: { gte: ayerInicio, lt: hoyInicio },
+        },
+        _sum: { totalWTaxes: true },
+      }),
+    ]);
+    const totalHoy = new Decimal(ventasHoy._sum.totalWTaxes ?? 0);
+    const totalAyer = new Decimal(ventasAyer._sum.totalWTaxes ?? 0);
+    const deltaHoyPct = totalAyer.gt(0)
+      ? totalHoy.minus(totalAyer).dividedBy(totalAyer).times(100).toDecimalPlaces(1).toNumber()
+      : null;
 
     // Situación fiscal (débito − crédito − retenciones).
     const fiscal = await this.libros.resumenIva(actor, year, month);
@@ -53,8 +94,10 @@ export class DashboardService {
 
     return {
       periodo: { year, month },
+      hoy: { totalBs: totalHoy.toFixed(2), deltaPct: deltaHoyPct },
       ventasMes: {
         cantidad: ventas._count,
+        cantidadMesAnterior: ventasMesAnterior,
         total: (ventas._sum.totalWTaxes ?? new Decimal(0)).toFixed(2),
       },
       fiscal,

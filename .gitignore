@@ -21,6 +21,9 @@ logs
 # Prisma
 prisma/*.db
 
+# Archivos subidos por usuarios (fotos de producto, etc.)
+/uploads
+
 # Editor / SO
 .idea
 .vscode/*

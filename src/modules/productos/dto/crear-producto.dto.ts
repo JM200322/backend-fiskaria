@@ -7,6 +7,7 @@ import {
   IsPositive,
   IsString,
   IsUUID,
+  MaxLength,
   Min,
 } from 'class-validator';
 
@@ -14,6 +15,15 @@ export enum TipoProductoDto {
   ALMACENABLE = 'ALMACENABLE',
   CONSUMIBLE = 'CONSUMIBLE',
   SERVICIO = 'SERVICIO',
+}
+
+export enum UnidadMedidaDto {
+  UNID = 'UNID',
+  KG = 'KG',
+  LT = 'LT',
+  CAJA = 'CAJA',
+  SACO = 'SACO',
+  PAQ = 'PAQ',
 }
 
 export class CrearProductoDto {
@@ -69,4 +79,21 @@ export class CrearProductoDto {
   @IsArray()
   @IsUUID('all', { each: true })
   proveedorIds?: string[];
+
+  @ApiPropertyOptional({ description: 'Código de barras (texto libre, sin validar formato)' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  codigoBarras?: string;
+
+  @ApiPropertyOptional({ description: 'Lote de producción/inventario' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  lote?: string;
+
+  @ApiPropertyOptional({ enum: UnidadMedidaDto })
+  @IsOptional()
+  @IsEnum(UnidadMedidaDto)
+  unidadMedida?: UnidadMedidaDto;
 }

@@ -1,4 +1,5 @@
 import { Global, Module } from '@nestjs/common';
+import { ImprentaController } from './imprenta.controller';
 import { ImprentaService } from './imprenta.service';
 
 /**
@@ -7,6 +8,7 @@ import { ImprentaService } from './imprenta.service';
  */
 @Global()
 @Module({
+  controllers: [ImprentaController],
   providers: [ImprentaService],
   exports: [ImprentaService],
 })

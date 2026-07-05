@@ -1,10 +1,14 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma, Producto, TipoProducto } from '@prisma/client';
+import Decimal from 'decimal.js';
+import { redondear } from 'src/common/fiscal/calculo-fiscal';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { AuditoriaService } from '../auditoria/auditoria.service';
 import { AuthenticatedUser } from '../auth/types/authenticated-user';
+import { ContabilidadService } from '../contabilidad/contabilidad.service';
 import { ActualizarProductoDto } from './dto/actualizar-producto.dto';
 import { CrearProductoDto } from './dto/crear-producto.dto';
+import { ReponerStockDto } from './dto/reponer-stock.dto';
 
 const incluirRelaciones = {
   categoriaFiscal: true,
@@ -17,6 +21,7 @@ export class ProductosService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly auditoria: AuditoriaService,
+    private readonly contabilidad: ContabilidadService,
   ) {}
 
   async crear(dto: CrearProductoDto, actor: AuthenticatedUser, ip?: string) {
@@ -48,6 +53,9 @@ export class ProductosService {
         precio: dto.precio,
         stock: esAlmacenable ? (dto.stock ?? 0) : 0,
         stockMinimo: esAlmacenable ? (dto.stockMinimo ?? 0) : 0,
+        codigoBarras: dto.codigoBarras,
+        lote: dto.lote,
+        unidadMedida: dto.unidadMedida,
         proveedores: dto.proveedorIds?.length
           ? { create: dto.proveedorIds.map((terceroId) => ({ terceroId })) }
           : undefined,
@@ -61,11 +69,17 @@ export class ProductosService {
 
   async listar(
     actor: AuthenticatedUser,
-    opts: { q?: string; tipo?: TipoProducto; bajoStock?: boolean } = {},
+    opts: {
+      q?: string;
+      tipo?: TipoProducto;
+      bajoStock?: boolean;
+      categoriaComercialId?: string;
+    } = {},
   ) {
     const contribuyenteId = this.tenantId(actor);
     const where: Prisma.ProductoWhereInput = { contribuyenteId, deletedAt: null };
     if (opts.tipo) where.tipo = opts.tipo;
+    if (opts.categoriaComercialId) where.categoriaComercialId = opts.categoriaComercialId;
     if (opts.q) {
       where.OR = [
         { nombre: { contains: opts.q, mode: 'insensitive' } },
@@ -110,6 +124,9 @@ export class ProductosService {
       ivaOverride: dto.ivaOverride,
       precio: dto.precio,
       stockMinimo: dto.stockMinimo,
+      codigoBarras: dto.codigoBarras,
+      lote: dto.lote,
+      unidadMedida: dto.unidadMedida,
     };
     if (dto.categoriaFiscalId)
       data.categoriaFiscal = { connect: { id: dto.categoriaFiscalId } };
@@ -129,6 +146,99 @@ export class ProductosService {
     });
     await this.audit(actor, ip, 'actualizar_producto', id);
     return this.conIva(producto);
+  }
+
+  /**
+   * Reposición de stock (entrada de inventario). Solo ALMACENABLE (RN-121):
+   * incrementa stock, fija costoUltimo (base "última compra", no PEPS/promedio),
+   * y registra el asiento con los MISMOS eventos que Compras (compras_gasto/
+   * iva_credito/cuentas_por_pagar) — una reposición ES una compra de inventario,
+   * solo que capturada desde Inventario en vez del flujo de Compras.
+   */
+  async reponerStock(id: string, dto: ReponerStockDto, actor: AuthenticatedUser, ip?: string) {
+    const contribuyenteId = this.tenantId(actor);
+    const producto = await this.prisma.producto.findFirst({
+      where: { id, contribuyenteId, deletedAt: null },
+    });
+    if (!producto) throw new NotFoundException('Producto no encontrado');
+    if (producto.tipo !== TipoProducto.ALMACENABLE) {
+      throw new BadRequestException('Solo los productos almacenables controlan stock (RN-121)');
+    }
+
+    const costoTotal = redondear(new Decimal(dto.cantidad).times(dto.costoUnitario));
+    const ivaCredito = redondear(dto.ivaCredito ?? 0);
+    const fecha = new Date();
+
+    const [productoActualizado, movimiento] = await this.prisma.$transaction([
+      this.prisma.producto.update({
+        where: { id },
+        data: {
+          stock: { increment: dto.cantidad },
+          costoUltimo: dto.costoUnitario,
+        },
+        include: incluirRelaciones,
+      }),
+      this.prisma.movimientoInventario.create({
+        data: {
+          contribuyenteId,
+          productoId: id,
+          cantidad: dto.cantidad,
+          costoUnitario: dto.costoUnitario,
+          costoTotal: costoTotal.toFixed(2),
+          ivaCredito: ivaCredito.toFixed(2),
+          referencia: dto.referencia,
+          fecha,
+        },
+      }),
+    ]);
+
+    // Libro Diario (RN-107): best-effort, no bloquea la reposición si falta config.
+    await this.contabilidad.registrarAutomatico({
+      contribuyenteId,
+      fecha,
+      glosa: `Reposición de stock — ${producto.nombre}`,
+      documentoRef: movimiento.id,
+      lineas: [
+        { evento: 'compras_gasto', debe: costoTotal },
+        { evento: 'iva_credito', debe: ivaCredito },
+        { evento: 'cuentas_por_pagar', haber: costoTotal.plus(ivaCredito) },
+      ],
+    });
+
+    await this.audit(actor, ip, 'reponer_stock', id, {
+      cantidad: dto.cantidad,
+      costoUnitario: dto.costoUnitario,
+    });
+    return { producto: this.conIva(productoActualizado), movimiento };
+  }
+
+  /** Guarda la ruta pública del archivo ya escrito a disco por Multer (ver controller). */
+  async guardarImagen(id: string, rutaPublica: string, actor: AuthenticatedUser) {
+    const contribuyenteId = this.tenantId(actor);
+    const producto = await this.prisma.producto.findFirst({
+      where: { id, contribuyenteId, deletedAt: null },
+    });
+    if (!producto) throw new NotFoundException('Producto no encontrado');
+    const actualizado = await this.prisma.producto.update({
+      where: { id },
+      data: { imagenUrl: rutaPublica },
+      include: incluirRelaciones,
+    });
+    return this.conIva(actualizado);
+  }
+
+  async historialMovimientos(id: string, actor: AuthenticatedUser) {
+    const contribuyenteId = this.tenantId(actor);
+    const producto = await this.prisma.producto.findFirst({
+      where: { id, contribuyenteId, deletedAt: null },
+      select: { id: true },
+    });
+    if (!producto) throw new NotFoundException('Producto no encontrado');
+    return this.prisma.movimientoInventario.findMany({
+      where: { productoId: id, contribuyenteId },
+      orderBy: { fecha: 'desc' },
+      take: 50,
+    });
   }
 
   /** Alícuota de IVA efectiva: override del producto, o la de su categoría fiscal (RN-102). */

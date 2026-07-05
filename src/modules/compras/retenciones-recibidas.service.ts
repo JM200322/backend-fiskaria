@@ -39,9 +39,13 @@ export class RetencionesRecibidasService {
     return reg;
   }
 
-  listar(actor: AuthenticatedUser, tipo?: TipoRetencion) {
+  listar(actor: AuthenticatedUser, tipo?: TipoRetencion, year?: number, month?: number) {
+    const fecha =
+      year && month
+        ? { gte: new Date(Date.UTC(year, month - 1, 1)), lt: new Date(Date.UTC(year, month, 1)) }
+        : undefined;
     return this.prisma.retencionRecibida.findMany({
-      where: { contribuyenteId: this.tenantId(actor), tipo },
+      where: { contribuyenteId: this.tenantId(actor), tipo, fecha },
       orderBy: { fecha: 'desc' },
       take: 100,
     });
