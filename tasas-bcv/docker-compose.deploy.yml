@@ -1,0 +1,58 @@
+networks:
+  devops-net:
+    external: true
+    name: k8s_devops-net
+
+services:
+  api:
+    image: ${IMAGE_NAME}:${IMAGE_TAG:-latest}
+    container_name: ms-tasas-bcv-api
+    restart: unless-stopped
+    environment:
+      API_HOST: 0.0.0.0
+      API_PORT: 3000
+      NODE_ENV: production
+      TZ: ${TZ:-America/Caracas}
+      DATABASE_URL: ${DATABASE_URL}
+      NODE_TLS_REJECT_UNAUTHORIZED: "0"
+      BCV_INSECURE_TLS: "1"
+    ports:
+      - "3000:3000"
+    command: sh -c "npm run db:setup:prod && node dist/main.js"
+    networks:
+      - devops-net
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+  bcv-scheduler:
+    image: ${IMAGE_NAME}:${IMAGE_TAG:-latest}
+    container_name: ms-tasas-bcv-scheduler
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      TZ: ${TZ:-America/Caracas}
+      DATABASE_URL: ${DATABASE_URL}
+      NODE_TLS_REJECT_UNAUTHORIZED: "0"
+      BCV_INSECURE_TLS: "1"
+      BCV_SYNC_HOURS: "8,14,20"
+      BCV_SYNC_RUN_ON_START: "0"
+    command: node dist/scheduler.js
+    networks:
+      - devops-net
+    depends_on:
+      api:
+        condition: service_healthy
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"

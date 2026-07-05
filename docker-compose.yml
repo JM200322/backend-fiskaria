@@ -47,6 +47,60 @@ services:
       timeout: 5s
       retries: 5
 
+  # ── Microservicio de tasas BCV (USD/EUR ↔ Bs) ─────────────────────────────
+  # Repo dentro de ./tasas-bcv (NestJS + TypeORM). El backend lo consume por HTTP
+  # en http://localhost:3005 (TASAS_BCV_URL). Persiste en la MISMA base del backend
+  # (facturador), en su esquema propio "DBO" (tabla DBO.tasas_diarias) para no chocar
+  # con las tablas Prisma del esquema public. Reusa el contenedor `postgres` de arriba.
+  tasas-bcv:
+    build:
+      context: ./tasas-bcv
+    image: tasas-bcv:latest
+    container_name: tasas-bcv-api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://facturador:facturador@postgres:5432/facturador
+      API_HOST: 0.0.0.0
+      API_PORT: '3000'
+      NODE_ENV: production
+      TZ: America/Caracas
+      BCV_INSECURE_TLS: '1' # el sitio del BCV suele fallar verificación SSL
+    ports:
+      - '3005:3000' # host 3005 → contenedor 3000 (calza con TASAS_BCV_URL)
+    # La tabla `tasa_cache` la crea y gestiona Prisma (backend). El micro NO corre
+    # migraciones propias: solo lee/escribe esa tabla. Arranca directo.
+    command: node dist/main.js
+    healthcheck:
+      test:
+        [
+          'CMD-SHELL',
+          "node -e \"fetch('http://127.0.0.1:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\"",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  # Scraper del BCV (misma imagen). Refresca las tasas 3 veces al día.
+  tasas-bcv-scheduler:
+    image: tasas-bcv:latest
+    container_name: tasas-bcv-scheduler
+    restart: unless-stopped
+    depends_on:
+      tasas-bcv:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://facturador:facturador@postgres:5432/facturador
+      NODE_ENV: production
+      TZ: America/Caracas
+      BCV_SYNC_HOURS: '8,14,20'
+      BCV_SYNC_RUN_ON_START: '1' # trae tasas al levantar (útil en demo)
+      BCV_INSECURE_TLS: '1'
+    command: node dist/scheduler.js
+
 volumes:
   postgres_data:
   redis_data:

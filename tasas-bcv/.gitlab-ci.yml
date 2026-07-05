@@ -1,0 +1,67 @@
+# =============================================================================
+# GitLab CI/CD Pipeline - Tasas BCV API
+# Flujo: Build → Push to Registry → Deploy en el mismo servidor
+# =============================================================================
+
+variables:
+  IMAGE_NAME: $CI_REGISTRY_IMAGE
+  IMAGE_TAG: $CI_COMMIT_SHORT_SHA
+  IMAGE_LATEST: $CI_REGISTRY_IMAGE:latest
+  DEPLOY_PATH: /data/microservices/tasas-bcv
+  DOCKER_NETWORK_DEVOPS: k8s_devops-net
+
+stages:
+  - build
+  - push
+  - deploy
+
+build:
+  stage: build
+  tags:
+    - shell
+    - docker
+  script:
+    - echo "nROwryCOEst5YSC1yglLM6ekNUgJ5AQNFcB85iLacdA=" | docker login -u "root" --password-stdin $CI_REGISTRY
+    - docker build -t $IMAGE_NAME:$IMAGE_TAG .
+    - docker tag $IMAGE_NAME:$IMAGE_TAG $IMAGE_LATEST
+  only:
+    - main
+
+push:
+  stage: push
+  tags:
+    - shell
+    - docker
+  script:
+    - echo "nROwryCOEst5YSC1yglLM6ekNUgJ5AQNFcB85iLacdA=" | docker login -u "root" --password-stdin $CI_REGISTRY
+    - docker push $IMAGE_NAME:$IMAGE_TAG
+    - docker push $IMAGE_LATEST
+  only:
+    - main
+
+deploy:
+  stage: deploy
+  tags:
+    - shell
+    - deploy
+  script:
+    - mkdir -p $DEPLOY_PATH
+    - cp docker-compose.deploy.yml $DEPLOY_PATH/docker-compose.yml
+    - |
+      cat > $DEPLOY_PATH/.env <<EOF
+      # Auto-generado por GitLab CI/CD - $(date)
+      IMAGE_NAME=$IMAGE_NAME
+      IMAGE_TAG=$IMAGE_TAG
+      TZ=America/Caracas
+      DATABASE_URL=postgresql://postgres:OAUypksG@postgres:5432/BNPL
+      BCV_INSECURE_TLS=1
+      EOF
+    - echo "nROwryCOEst5YSC1yglLM6ekNUgJ5AQNFcB85iLacdA=" | docker login -u "root" --password-stdin $CI_REGISTRY
+    - docker pull $IMAGE_LATEST
+    - cd $DEPLOY_PATH && docker compose up -d --force-recreate
+    - sleep 5
+    - docker compose -f $DEPLOY_PATH/docker-compose.yml ps
+  environment:
+    name: production
+  only:
+    - main

@@ -22,5 +22,8 @@
     "paths": {
       "src/*": ["src/*"]
     }
-  }
+  },
+  // tasas-bcv es un microservicio aparte (repo propio dentro de esta carpeta) con su
+  // propio tsconfig y dependencias (typeorm, etc.). No forma parte del build del backend.
+  "exclude": ["node_modules", "dist", "tasas-bcv"]
 }
