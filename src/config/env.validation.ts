@@ -1,5 +1,5 @@
 import { plainToInstance } from 'class-transformer';
-import { IsEnum, IsNumber, IsOptional, IsString, validateSync } from 'class-validator';
+import { IsEnum, IsNumber, IsOptional, IsString, MinLength, validateSync } from 'class-validator';
 
 /**
  * Validación de variables de entorno al arranque.
@@ -23,10 +23,13 @@ class EnvironmentVariables {
   @IsString()
   DATABASE_URL: string;
 
+  // Mínimo 32 caracteres para que un secreto débil no pase la validación de arranque.
   @IsString()
+  @MinLength(32)
   JWT_ACCESS_SECRET: string;
 
   @IsString()
+  @MinLength(32)
   JWT_REFRESH_SECRET: string;
 }
 

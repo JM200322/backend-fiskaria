@@ -22,7 +22,11 @@ export class AuthService {
 
   /** Valida credenciales y emite el par de tokens. */
   async login(email: string, password: string, ip?: string) {
-    const usuario = await this.prisma.usuario.findUnique({ where: { email } });
+    // omit global excluye passwordHash; aquí lo necesitamos para comparar.
+    const usuario = await this.prisma.usuario.findUnique({
+      where: { email },
+      omit: { passwordHash: false },
+    });
 
     // Mismo mensaje para email inexistente o clave incorrecta (no filtrar info).
     if (!usuario || !usuario.activo || usuario.deletedAt) {
@@ -54,7 +58,10 @@ export class AuthService {
 
   /** Cambia la contraseña del usuario y limpia la marca de clave temporal (RN-014). */
   async cambiarPassword(usuarioId: string, actual: string, nueva: string, ip?: string) {
-    const usuario = await this.prisma.usuario.findUnique({ where: { id: usuarioId } });
+    const usuario = await this.prisma.usuario.findUnique({
+      where: { id: usuarioId },
+      omit: { passwordHash: false },
+    });
     if (!usuario) {
       throw new UnauthorizedException('Usuario no válido');
     }

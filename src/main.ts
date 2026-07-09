@@ -19,6 +19,11 @@ async function bootstrap() {
   const port = config.get<number>('port') ?? 3000;
   const corsOrigins = config.get<string[]>('corsOrigins') ?? [];
 
+  // Detrás de un proxy/túnel (Cloudflare) confiamos en el primer salto para que
+  // req.ip y el rate-limit por IP usen la IP real del cliente, no la del proxy.
+  // Clave para la trazabilidad legal (la auditoría guarda la IP) y el throttling.
+  app.set('trust proxy', 1);
+
   // Seguridad y CORS.
   app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
   app.enableCors({ origin: corsOrigins, credentials: true });
@@ -45,19 +50,25 @@ async function bootstrap() {
   app.useGlobalFilters(new AllExceptionsFilter());
   app.useGlobalInterceptors(new LoggingInterceptor());
 
-  // Documentación OpenAPI (Swagger) en /{apiPrefix}/docs.
-  const swaggerConfig = new DocumentBuilder()
-    .setTitle('Facturador API — Sirumatek')
-    .setDescription('API del Sistema de Facturación Web con Cumplimiento Fiscal Venezolano')
-    .setVersion('0.1.0')
-    .addBearerAuth()
-    .build();
-  const document = SwaggerModule.createDocument(app, swaggerConfig);
-  SwaggerModule.setup(`${apiPrefix}/docs`, app, document);
+  // Documentación OpenAPI (Swagger) en /{apiPrefix}/docs. Se deshabilita en
+  // producción para no publicar toda la superficie de la API.
+  const swaggerHabilitado = config.get<string>('env') !== 'production';
+  if (swaggerHabilitado) {
+    const swaggerConfig = new DocumentBuilder()
+      .setTitle('Facturador API — Sirumatek')
+      .setDescription('API del Sistema de Facturación Web con Cumplimiento Fiscal Venezolano')
+      .setVersion('0.1.0')
+      .addBearerAuth()
+      .build();
+    const document = SwaggerModule.createDocument(app, swaggerConfig);
+    SwaggerModule.setup(`${apiPrefix}/docs`, app, document);
+  }
 
   await app.listen(port);
   logger.log(`API escuchando en http://localhost:${port}/${apiPrefix}`);
-  logger.log(`Swagger disponible en http://localhost:${port}/${apiPrefix}/docs`);
+  if (swaggerHabilitado) {
+    logger.log(`Swagger disponible en http://localhost:${port}/${apiPrefix}/docs`);
+  }
 }
 
 void bootstrap();

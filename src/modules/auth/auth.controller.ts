@@ -1,5 +1,6 @@
 import { Body, Controller, HttpCode, HttpStatus, Ip, Post, Get } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import { AuthService } from './auth.service';
 import { CurrentUser } from './decorators/current-user.decorator';
 import { Public } from './decorators/public.decorator';
@@ -15,6 +16,8 @@ export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
   @Public()
+  // Límite estricto anti fuerza bruta: 5 intentos/min por IP (el global es 100/min).
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @Post('login')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Iniciar sesión y obtener tokens' })
@@ -31,6 +34,8 @@ export class AuthController {
   }
 
   @Public()
+  // Anti-abuso: evita usar la recuperación para sondear correos o spamear claves.
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @Post('recuperar')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Recuperar acceso: envía una clave temporal (RN-014)' })
