@@ -328,14 +328,48 @@ export class FacturadorService {
     return { intentados: pendientes.length, enviados };
   }
 
-  async listar(actor: AuthenticatedUser, opts: { tipo?: TipoDocumento; estatus?: EstatusDocumento } = {}) {
+  async listar(
+    actor: AuthenticatedUser,
+    opts: {
+      tipo?: TipoDocumento;
+      estatus?: EstatusDocumento;
+      desde?: string; // YYYY-MM-DD (inclusive)
+      hasta?: string; // YYYY-MM-DD (inclusive)
+      limit?: number;
+      offset?: number;
+    } = {},
+  ) {
     const contribuyenteId = this.tenantId(actor);
+    // Cap de 200 para que un cliente no pida un volcado ilimitado; default 100 (comportamiento previo).
+    const take = Number.isFinite(opts.limit) ? Math.min(Math.max(Math.trunc(opts.limit!), 1), 200) : 100;
+    const skip = Number.isFinite(opts.offset) ? Math.max(Math.trunc(opts.offset!), 0) : 0;
     return this.prisma.documentoFiscal.findMany({
-      where: { contribuyenteId, tipo: opts.tipo, estatus: opts.estatus },
+      where: {
+        contribuyenteId,
+        tipo: opts.tipo,
+        estatus: opts.estatus,
+        fecha: this.rangoFecha(opts.desde, opts.hasta),
+      },
       include: incluir,
-      orderBy: { createdAt: 'desc' },
-      take: 100,
+      // Desempate por `id` para que la paginación por offset sea estable cuando
+      // varios documentos comparten la misma `fecha` (sin él, se solapan páginas).
+      orderBy: [{ fecha: 'desc' }, { id: 'desc' }],
+      take,
+      skip,
     });
+  }
+
+  /** Filtro de rango sobre `fecha` (día del documento). `hasta` es inclusivo hasta fin del día. */
+  private rangoFecha(desde?: string, hasta?: string): Prisma.DateTimeFilter | undefined {
+    if (!desde && !hasta) return undefined;
+    const filtro: Prisma.DateTimeFilter = {};
+    if (desde) filtro.gte = new Date(desde);
+    if (hasta) {
+      const h = new Date(hasta);
+      if (/^\d{4}-\d{2}-\d{2}$/.test(hasta)) h.setUTCHours(23, 59, 59, 999); // solo fecha → todo el día
+      filtro.lte = h;
+    }
+    return filtro;
   }
 
   async obtener(id: string, actor: AuthenticatedUser) {

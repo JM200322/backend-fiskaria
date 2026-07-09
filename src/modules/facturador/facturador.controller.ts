@@ -57,15 +57,30 @@ export class FacturadorController {
 
   @Get()
   @RequierePermisos('facturas:ver')
-  @ApiOperation({ summary: 'Listar documentos fiscales' })
+  @ApiOperation({ summary: 'Listar documentos fiscales (paginado, con rango de fechas)' })
   @ApiQuery({ name: 'tipo', required: false, enum: TipoDocumento })
   @ApiQuery({ name: 'estatus', required: false, enum: EstatusDocumento })
+  @ApiQuery({ name: 'desde', required: false, description: 'Fecha desde YYYY-MM-DD (inclusive)' })
+  @ApiQuery({ name: 'hasta', required: false, description: 'Fecha hasta YYYY-MM-DD (inclusive)' })
+  @ApiQuery({ name: 'limit', required: false, description: 'Máx. registros 1-200 (default 100)' })
+  @ApiQuery({ name: 'offset', required: false, description: 'Desplazamiento para paginar (default 0)' })
   listar(
     @CurrentUser() actor: AuthenticatedUser,
     @Query('tipo') tipo?: TipoDocumento,
     @Query('estatus') estatus?: EstatusDocumento,
+    @Query('desde') desde?: string,
+    @Query('hasta') hasta?: string,
+    @Query('limit') limit?: string,
+    @Query('offset') offset?: string,
   ) {
-    return this.facturador.listar(actor, { tipo, estatus });
+    return this.facturador.listar(actor, {
+      tipo,
+      estatus,
+      desde,
+      hasta,
+      limit: limit !== undefined ? Number(limit) : undefined,
+      offset: offset !== undefined ? Number(offset) : undefined,
+    });
   }
 
   @Get(':id')

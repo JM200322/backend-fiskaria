@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { closeSync, openSync, readSync, unlinkSync } from 'node:fs';
 import { extname } from 'node:path';
 import {
   BadRequestException,
@@ -26,6 +27,24 @@ import { ReponerStockDto } from './dto/reponer-stock.dto';
 import { ProductosService } from './productos.service';
 
 const IMAGENES_PERMITIDAS = ['.jpg', '.jpeg', '.png', '.webp'];
+
+/**
+ * Valida el CONTENIDO real del archivo por sus magic bytes (no por la extensión, que
+ * es falsificable). Cubre los tres formatos permitidos: JPEG, PNG y WEBP.
+ */
+function esImagenReal(rutaDisco: string): boolean {
+  const buf = Buffer.alloc(12);
+  const fd = openSync(rutaDisco, 'r');
+  try {
+    readSync(fd, buf, 0, 12, 0);
+  } finally {
+    closeSync(fd);
+  }
+  const jpeg = buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff;
+  const png = buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47;
+  const webp = buf.toString('ascii', 0, 4) === 'RIFF' && buf.toString('ascii', 8, 12) === 'WEBP';
+  return jpeg || png || webp;
+}
 
 @ApiTags('productos')
 @ApiBearerAuth()
@@ -139,6 +158,11 @@ export class ProductosController {
     @CurrentUser() actor: AuthenticatedUser,
   ) {
     if (!file) throw new BadRequestException('Imagen inválida — solo jpg, png o webp, máx. 5MB');
+    // El fileFilter solo mira la extensión (falsificable). Aquí verificamos el contenido real.
+    if (!esImagenReal(file.path)) {
+      unlinkSync(file.path); // no dejar el archivo falso en disco
+      throw new BadRequestException('El archivo no es una imagen válida (jpg, png o webp)');
+    }
     return this.productos.guardarImagen(id, `/uploads/productos/${file.filename}`, actor);
   }
 }
