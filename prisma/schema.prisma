@@ -173,6 +173,7 @@ model Producto {
   deletedAt            DateTime?              @map("deleted_at")
 
   @@unique([contribuyenteId, codigo])
+  @@unique([contribuyenteId, codigoBarras]) // dos productos del mismo comercio no comparten EAN/UPC
   @@index([contribuyenteId])
   @@map("productos")
 }

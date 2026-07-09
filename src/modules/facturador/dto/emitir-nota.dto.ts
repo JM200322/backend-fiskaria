@@ -1,7 +1,15 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { ArrayMinSize, IsArray, IsString, IsUUID, ValidateNested } from 'class-validator';
-import { ItemFacturaDto } from './emitir-factura.dto';
+import {
+  ArrayMinSize,
+  IsArray,
+  IsEnum,
+  IsOptional,
+  IsString,
+  IsUUID,
+  ValidateNested,
+} from 'class-validator';
+import { ItemFacturaDto, MetodoPagoDto } from './emitir-factura.dto';
 
 /**
  * Nota de Crédito o Débito. Siempre referencia una factura existente (RN-002).
@@ -12,9 +20,10 @@ export class EmitirNotaDto {
   @IsUUID()
   facturaOrigenId: string;
 
-  @ApiProperty({ example: 'Devolución parcial de mercancía' })
+  @ApiPropertyOptional({ example: 'Devolución parcial de mercancía' })
+  @IsOptional()
   @IsString()
-  motivo: string;
+  motivo?: string;
 
   @ApiProperty({ type: [ItemFacturaDto] })
   @IsArray()
@@ -22,4 +31,12 @@ export class EmitirNotaDto {
   @ValidateNested({ each: true })
   @Type(() => ItemFacturaDto)
   items: ItemFacturaDto[];
+
+  @ApiPropertyOptional({
+    enum: MetodoPagoDto,
+    description: 'Método usado para reembolsar al cliente (Nota de Crédito). Si se omite, se copia el de la factura origen.',
+  })
+  @IsOptional()
+  @IsEnum(MetodoPagoDto)
+  metodoPago?: MetodoPagoDto;
 }

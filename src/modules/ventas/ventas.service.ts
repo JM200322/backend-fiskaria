@@ -23,22 +23,24 @@ export class VentasService {
     private readonly auditoria: AuditoriaService,
   ) {}
 
-  /** CU-1: crea una cotización (no es documento fiscal — RN-103). */
-  async crear(dto: CrearVentaDto, actor: AuthenticatedUser, ip?: string) {
-    const contribuyenteId = this.tenantId(actor);
-
+  /** Cliente válido del contribuyente (compartido por crear/actualizar). */
+  private async resolverCliente(clienteId: string, contribuyenteId: string) {
     const cliente = await this.prisma.tercero.findFirst({
-      where: { id: dto.clienteId, contribuyenteId, esCliente: true, deletedAt: null },
+      where: { id: clienteId, contribuyenteId, esCliente: true, deletedAt: null },
     });
     if (!cliente) throw new BadRequestException('Cliente inválido');
+    return cliente;
+  }
 
+  /** Resuelve productos + cálculo fiscal estimado (compartido por crear/actualizar). */
+  private async resolverItems(items: { productoId: string; cantidad: number }[], contribuyenteId: string) {
     const productos = await this.prisma.producto.findMany({
-      where: { id: { in: dto.items.map((i) => i.productoId) }, contribuyenteId, deletedAt: null },
+      where: { id: { in: items.map((i) => i.productoId) }, contribuyenteId, deletedAt: null },
       include: { categoriaFiscal: true },
     });
     const mapa = new Map(productos.map((p) => [p.id, p]));
 
-    const items = dto.items.map((it) => {
+    const resueltos = items.map((it) => {
       const prod = mapa.get(it.productoId);
       if (!prod) throw new BadRequestException(`Producto inválido: ${it.productoId}`);
       return {
@@ -49,8 +51,16 @@ export class VentasService {
     });
 
     const calc = calcularDocumento(
-      items.map((i) => ({ cantidad: i.cantidad, precioUnitario: i.producto.precio, alicuota: i.alicuota })),
+      resueltos.map((i) => ({ cantidad: i.cantidad, precioUnitario: i.producto.precio, alicuota: i.alicuota })),
     );
+    return { items: resueltos, calc };
+  }
+
+  /** CU-1: crea una cotización (no es documento fiscal — RN-103). */
+  async crear(dto: CrearVentaDto, actor: AuthenticatedUser, ip?: string) {
+    const contribuyenteId = this.tenantId(actor);
+    const cliente = await this.resolverCliente(dto.clienteId, contribuyenteId);
+    const { items, calc } = await this.resolverItems(dto.items, contribuyenteId);
 
     const venta = await this.prisma.venta.create({
       data: {
@@ -71,6 +81,39 @@ export class VentasService {
     });
     await this.audit(actor, ip, 'crear_cotizacion', venta.id);
     return venta;
+  }
+
+  /** Edita cliente/ítems de una cotización — solo mientras siga en COTIZACION (RN-103). */
+  async actualizar(id: string, dto: CrearVentaDto, actor: AuthenticatedUser, ip?: string) {
+    const contribuyenteId = this.tenantId(actor);
+    const venta = await this.obtener(id, actor);
+    if (venta.estado !== EstadoVenta.COTIZACION) {
+      throw new BadRequestException('Solo una cotización sin confirmar puede editarse');
+    }
+    const cliente = await this.resolverCliente(dto.clienteId, contribuyenteId);
+    const { items, calc } = await this.resolverItems(dto.items, contribuyenteId);
+
+    const actualizada = await this.prisma.$transaction(async (tx) => {
+      await tx.ventaItem.deleteMany({ where: { ventaId: id } });
+      return tx.venta.update({
+        where: { id },
+        data: {
+          terceroId: cliente.id,
+          totalEstimado: calc.total,
+          items: {
+            create: items.map((i) => ({
+              productoId: i.producto.id,
+              descripcion: i.producto.nombre,
+              cantidad: i.cantidad,
+              precio: redondear(i.producto.precio).toFixed(2),
+            })),
+          },
+        },
+        include: incluir,
+      });
+    });
+    await this.audit(actor, ip, 'editar_cotizacion', id);
+    return actualizada;
   }
 
   /** CU-2: confirma una cotización. */
@@ -130,13 +173,31 @@ export class VentasService {
     return { venta: actualizada, factura };
   }
 
-  listar(actor: AuthenticatedUser, estado?: EstadoVenta) {
-    return this.prisma.venta.findMany({
+  async listar(actor: AuthenticatedUser, estado?: EstadoVenta) {
+    const ventas = await this.prisma.venta.findMany({
       where: { contribuyenteId: this.tenantId(actor), estado },
       include: incluir,
       orderBy: { createdAt: 'desc' },
       take: 100,
     });
+    return this.conPaymentMethod(ventas);
+  }
+
+  /** Adjunta el método de pago real (columna "Forma de pago") desde el DocumentoFiscal ya emitido. */
+  private async conPaymentMethod<T extends { documentoFiscalId: string | null }>(
+    ventas: T[],
+  ): Promise<(T & { paymentMethod: string | null })[]> {
+    const ids = [...new Set(ventas.map((v) => v.documentoFiscalId).filter((id): id is string => !!id))];
+    if (ids.length === 0) return ventas.map((v) => ({ ...v, paymentMethod: null }));
+    const docs = await this.prisma.documentoFiscal.findMany({
+      where: { id: { in: ids } },
+      select: { id: true, paymentMethod: true },
+    });
+    const mapa = new Map(docs.map((d) => [d.id, d.paymentMethod]));
+    return ventas.map((v) => ({
+      ...v,
+      paymentMethod: v.documentoFiscalId ? (mapa.get(v.documentoFiscalId) ?? null) : null,
+    }));
   }
 
   async obtener(id: string, actor: AuthenticatedUser) {

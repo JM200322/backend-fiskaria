@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Ip, Param, Post, Query } from '@nestjs/common';
+import { Body, Controller, Get, Ip, Param, Patch, Post, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { EstadoVenta } from '@prisma/client';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
@@ -34,6 +34,18 @@ export class VentasController {
   @ApiOperation({ summary: 'Detalle de una venta' })
   obtener(@Param('id') id: string, @CurrentUser() actor: AuthenticatedUser) {
     return this.ventas.obtener(id, actor);
+  }
+
+  @Patch(':id')
+  @RequierePermisos('ventas:crear')
+  @ApiOperation({ summary: 'Editar cliente/ítems de una cotización (solo estado COTIZACION)' })
+  actualizar(
+    @Param('id') id: string,
+    @Body() dto: CrearVentaDto,
+    @CurrentUser() actor: AuthenticatedUser,
+    @Ip() ip: string,
+  ) {
+    return this.ventas.actualizar(id, dto, actor, ip);
   }
 
   @Post(':id/confirmar')

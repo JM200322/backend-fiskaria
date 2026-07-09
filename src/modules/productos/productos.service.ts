@@ -9,6 +9,7 @@ import { ContabilidadService } from '../contabilidad/contabilidad.service';
 import { ActualizarProductoDto } from './dto/actualizar-producto.dto';
 import { CrearProductoDto } from './dto/crear-producto.dto';
 import { ReponerStockDto } from './dto/reponer-stock.dto';
+import { OpenFoodFactsService } from './open-food-facts.service';
 
 const incluirRelaciones = {
   categoriaFiscal: true,
@@ -22,7 +23,31 @@ export class ProductosService {
     private readonly prisma: PrismaService,
     private readonly auditoria: AuditoriaService,
     private readonly contabilidad: ContabilidadService,
+    private readonly openFoodFacts: OpenFoodFactsService,
   ) {}
+
+  /**
+   * Busca primero en el catálogo del propio contribuyente (código de barras real
+   * de un producto físico); si no existe ahí, consulta Open Food Facts para
+   * sugerir datos con los que precargar "Nuevo producto" (RN: el backend nunca
+   * crea el producto solo; el alta la confirma el usuario).
+   */
+  async buscarPorCodigoBarras(codigoBarras: string, actor: AuthenticatedUser) {
+    const contribuyenteId = this.tenantId(actor);
+    const producto = await this.prisma.producto.findFirst({
+      where: { contribuyenteId, codigoBarras, deletedAt: null },
+      include: incluirRelaciones,
+    });
+    if (producto) {
+      return { encontradoEn: 'catalogo' as const, producto: this.conIva(producto) };
+    }
+
+    const sugerencia = await this.openFoodFacts.buscarPorCodigoBarras(codigoBarras);
+    if (sugerencia) {
+      return { encontradoEn: 'openfoodfacts' as const, sugerencia };
+    }
+    return { encontradoEn: 'ninguno' as const };
+  }
 
   async crear(dto: CrearProductoDto, actor: AuthenticatedUser, ip?: string) {
     const contribuyenteId = this.tenantId(actor);
@@ -37,6 +62,7 @@ export class ProductosService {
     if (duplicado) {
       throw new BadRequestException(`Ya existe un producto con el código ${dto.codigo}`);
     }
+    await this.assertCodigoBarrasDisponible(dto.codigoBarras, contribuyenteId);
 
     // Solo los almacenables manejan stock (RN-121, I6).
     const esAlmacenable = dto.tipo === TipoProducto.ALMACENABLE;
@@ -84,6 +110,7 @@ export class ProductosService {
       where.OR = [
         { nombre: { contains: opts.q, mode: 'insensitive' } },
         { codigo: { contains: opts.q, mode: 'insensitive' } },
+        { codigoBarras: { contains: opts.q, mode: 'insensitive' } },
       ];
     }
     const productos = await this.prisma.producto.findMany({
@@ -117,6 +144,9 @@ export class ProductosService {
     if (dto.categoriaComercialId)
       await this.assertCategoriaComercial(dto.categoriaComercialId, contribuyenteId);
     if (dto.proveedorIds) await this.assertProveedores(dto.proveedorIds, contribuyenteId);
+    if (dto.codigoBarras !== undefined) {
+      await this.assertCodigoBarrasDisponible(dto.codigoBarras, contribuyenteId, id);
+    }
 
     const data: Prisma.ProductoUpdateInput = {
       nombre: dto.nombre,
@@ -244,10 +274,13 @@ export class ProductosService {
   /** Alícuota de IVA efectiva: override del producto, o la de su categoría fiscal (RN-102). */
   private conIva(producto: Producto & { categoriaFiscal: { alicuotaIva: Prisma.Decimal } }) {
     const iva = producto.ivaOverride ?? producto.categoriaFiscal.alicuotaIva;
+    // Stock en negativo es "bajo stock" siempre, incluso sin punto de reorden
+    // configurado (stockMinimo=0) — de lo contrario un producto sobrevendido
+    // desaparece por completo del radar de "Bajo stock".
     const bajoStock =
       producto.tipo === TipoProducto.ALMACENABLE &&
-      Number(producto.stockMinimo) > 0 &&
-      Number(producto.stock) <= Number(producto.stockMinimo);
+      (Number(producto.stock) < 0 ||
+        (Number(producto.stockMinimo) > 0 && Number(producto.stock) <= Number(producto.stockMinimo)));
     return { ...producto, ivaAplicable: iva, bajoStock };
   }
 
@@ -267,6 +300,34 @@ export class ProductosService {
     if (!id) return;
     const cc = await this.prisma.categoriaComercial.findFirst({ where: { id, contribuyenteId } });
     if (!cc) throw new BadRequestException('Categoría comercial inválida');
+  }
+
+  /**
+   * Dos productos del mismo comercio no pueden compartir código de barras —
+   * rompería el "escanea y encuéntralo" (buscarPorCodigoBarras siempre
+   * traería el primero que matchee). `excluirProductoId` permite que un
+   * producto conserve su propio código al editarse.
+   */
+  private async assertCodigoBarrasDisponible(
+    codigoBarras: string | undefined,
+    contribuyenteId: string,
+    excluirProductoId?: string,
+  ) {
+    if (!codigoBarras) return;
+    const conflicto = await this.prisma.producto.findFirst({
+      where: {
+        contribuyenteId,
+        codigoBarras,
+        deletedAt: null,
+        id: excluirProductoId ? { not: excluirProductoId } : undefined,
+      },
+      select: { nombre: true },
+    });
+    if (conflicto) {
+      throw new BadRequestException(
+        `Este código de barras ya está asignado a "${conflicto.nombre}". Si es el correcto para este producto, genera uno nuevo para "${conflicto.nombre}" — así cada producto conserva un código único.`,
+      );
+    }
   }
 
   private async assertProveedores(ids: string[] | undefined, contribuyenteId: string) {

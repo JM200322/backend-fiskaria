@@ -66,6 +66,19 @@ export class ProductosController {
     });
   }
 
+  @Get('buscar/codigo-barras/:barcode')
+  @RequierePermisos('productos:ver')
+  @ApiOperation({
+    summary:
+      'Busca un código de barras escaneado: primero en el catálogo propio, luego en Open Food Facts',
+  })
+  buscarPorCodigoBarras(
+    @Param('barcode') barcode: string,
+    @CurrentUser() actor: AuthenticatedUser,
+  ) {
+    return this.productos.buscarPorCodigoBarras(barcode, actor);
+  }
+
   @Get(':id')
   @RequierePermisos('productos:ver')
   @ApiOperation({ summary: 'Detalle de un producto' })

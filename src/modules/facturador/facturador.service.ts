@@ -91,18 +91,24 @@ export class FacturadorService {
 
     // 3-4. Productos, construcción de líneas y cálculo fiscal.
     const { lineas, calc } = await this.prepararLineas(dto.items, contribuyenteId);
+    this.validarStockSuficiente(lineas);
 
-    // 5. Pagos e IGTF (RN-010). Los pagos deben cubrir el total (sin IGTF).
-    const sumaPagos = dto.pagos.reduce((acc, p) => acc.plus(p.monto), new Decimal(0));
-    if (!redondear(sumaPagos).equals(new Decimal(calc.total))) {
-      throw new BadRequestException(
-        `Los pagos (${redondear(sumaPagos).toFixed(2)}) no coinciden con el total (${calc.total})`,
-      );
-    }
+    // 5. Pagos e IGTF (RN-010, Ley IGTF). Si algún pago es en divisas, el
+    // cliente cubre también el 3% adicional: los pagos deben sumar
+    // total + IGTF, no solo el total. El IGTF se calcula ANTES de validar la
+    // suma porque el monto exigido lo incluye.
     const montoDivisas = dto.pagos
       .filter((p) => p.esDivisa)
       .reduce((acc, p) => acc.plus(p.monto), new Decimal(0));
     const igtf = montoDivisas.gt(0) ? calcularIgtf(montoDivisas) : '0.00';
+    const totalACubrir = new Decimal(calc.total).plus(igtf);
+
+    const sumaPagos = dto.pagos.reduce((acc, p) => acc.plus(p.monto), new Decimal(0));
+    if (!redondear(sumaPagos).equals(redondear(totalACubrir))) {
+      throw new BadRequestException(
+        `Los pagos (${redondear(sumaPagos).toFixed(2)}) no coinciden con el total a cubrir (${redondear(totalACubrir).toFixed(2)})`,
+      );
+    }
     const paymentMethod =
       dto.pagos.length === 1
         ? ETIQUETA_PAGO[dto.pagos[0].metodo]
@@ -243,10 +249,14 @@ export class FacturadorService {
           estatus: EstatusDocumento.NO_ENVIADO,
           clienteTerceroId: factura.clienteTerceroId,
           documentoOrigenId: factura.id, // trazabilidad (RN-002)
-          reasonTo: dto.motivo,
+          reasonTo: dto.motivo ?? null,
           fecha: ahora,
           hora,
-          paymentMethod: factura.paymentMethod,
+          // NC: el reembolso puede hacerse por un método distinto al de la venta original.
+          paymentMethod:
+            tipo === TipoDocumento.NOTA_CREDITO && dto.metodoPago
+              ? ETIQUETA_PAGO[dto.metodoPago]
+              : factura.paymentMethod,
           subtotal: calc.subtotal,
           totalTax: calc.totalIva,
           totalWTaxes: calc.total,
@@ -472,6 +482,32 @@ export class FacturadorService {
       lineas.map((l) => ({ cantidad: l.cantidad, precioUnitario: l.costoUnit, alicuota: l.alicuota })),
     );
     return { lineas, calc };
+  }
+
+  /**
+   * No se puede facturar más de lo que hay en stock (RN-121, ALMACENABLE). Sin
+   * este guard, `stock: { decrement }` deja el producto en negativo — el
+   * documento fiscal ya emitido no se puede deshacer, así que se valida ANTES
+   * de tocar numeración/transacción. Suma cantidades si el mismo producto
+   * aparece en más de una línea del pedido.
+   */
+  private validarStockSuficiente(lineas: { producto: { id: string; nombre: string; tipo: string; stock: Prisma.Decimal }; cantidad: Prisma.Decimal.Value }[]) {
+    const pedidoPorProducto = new Map<string, Decimal>();
+    for (const l of lineas) {
+      if (l.producto.tipo !== 'ALMACENABLE') continue;
+      const previo = pedidoPorProducto.get(l.producto.id) ?? new Decimal(0);
+      pedidoPorProducto.set(l.producto.id, previo.plus(l.cantidad));
+    }
+    for (const l of lineas) {
+      const pedido = pedidoPorProducto.get(l.producto.id);
+      if (!pedido) continue;
+      pedidoPorProducto.delete(l.producto.id); // valida cada producto una sola vez
+      if (pedido.gt(l.producto.stock)) {
+        throw new BadRequestException(
+          `Stock insuficiente para "${l.producto.nombre}": disponible ${l.producto.stock}, solicitado ${pedido.toString()}`,
+        );
+      }
+    }
   }
 
   /**

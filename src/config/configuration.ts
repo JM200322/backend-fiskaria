@@ -79,4 +79,12 @@ export default () => ({
     timeoutMs: parseInt(process.env.TASAS_BCV_TIMEOUT_MS ?? '6000', 10),
     mock: (process.env.TASAS_BCV_MOCK ?? 'true').toLowerCase() === 'true',
   },
+
+  // Open Food Facts (catálogo de productos, lectura pública). El User-Agent es
+  // obligatorio por sus términos de uso — sin él pueden bloquear la IP.
+  openFoodFacts: {
+    baseUrl: process.env.OFF_BASE_URL ?? 'https://world.openfoodfacts.org',
+    userAgent: process.env.OFF_USER_AGENT ?? 'Fiskaria/1.0 (soporte@fiskaria.app)',
+    timeoutMs: parseInt(process.env.OFF_TIMEOUT_MS ?? '6000', 10),
+  },
 });
