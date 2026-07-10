@@ -40,6 +40,24 @@ export interface DatosFacturaImprenta {
   } | null;
 }
 
+/**
+ * Traduce nuestra etiqueta de pago al valor exacto que acepta la API de la imprenta
+ * (validado contra el sandbox). Valores válidos: "Efectivo", "Pago Movil", "Transferencia",
+ * "Tarjeta Debito", "Tarjeta Credito". La API NO acepta "Divisas" ni "Mixto":
+ *  - Divisa en efectivo → "Efectivo" (el campo `igtf` la diferencia). TODO: confirmar con Sirumatek.
+ *  - Pago mixto → "Efectivo" por defecto. TODO: confirmar valor para mixto.
+ */
+const PAYMENT_METHOD_IMPRENTA: Record<string, string> = {
+  'Efectivo Bs.': 'Efectivo',
+  Divisas: 'Efectivo',
+  'Pago Móvil': 'Pago Movil',
+  Tarjeta: 'Tarjeta Debito',
+  Mixto: 'Efectivo',
+};
+export function mapearPaymentMethodImprenta(etiqueta: string): string {
+  return PAYMENT_METHOD_IMPRENTA[etiqueta] ?? 'Efectivo';
+}
+
 /** Fecha a formato del API de la imprenta: DD-MM-YYYY. */
 export function formatearFechaImprenta(fecha: Date): string {
   const d = String(fecha.getUTCDate()).padStart(2, '0');
@@ -62,7 +80,7 @@ export function construirPayloadFactura(datos: DatosFacturaImprenta): ImprentaFa
     client_email: datos.cliente.email ?? '',
     emition_date: formatearFechaImprenta(datos.fecha),
     emition_hour: datos.hora,
-    payment_method: datos.paymentMethod,
+    payment_method: mapearPaymentMethodImprenta(datos.paymentMethod),
     currency: 'VES',
     notify_client: datos.notificarCliente ? '1' : '0',
     subtotal: datos.subtotal,

@@ -65,11 +65,12 @@ export default () => ({
     mock: (process.env.SENIAT_MOCK ?? 'true').toLowerCase() === 'true',
   },
 
-  // Imprenta Digital homologada (RN-007/120). Contrato real pendiente (URL/auth/respuesta).
+  // Imprenta Digital — Sirumatek (RN-007). Auth por header API-T-Token: <id>|<secret>.
   imprenta: {
     baseUrl: process.env.IMPRENTA_BASE_URL ?? '',
+    apiToken: process.env.IMPRENTA_API_TOKEN ?? '',
     timeoutMs: parseInt(process.env.IMPRENTA_TIMEOUT_MS ?? '10000', 10),
-    // En dev no existe el endpoint real: se simula la asignación de número de control.
+    // Mientras el adaptador no esté al contrato real, se simula el número de control.
     mock: (process.env.IMPRENTA_MOCK ?? 'true').toLowerCase() === 'true',
   },
 

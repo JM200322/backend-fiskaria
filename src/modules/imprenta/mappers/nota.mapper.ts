@@ -2,7 +2,7 @@ import {
   ImprentaNotaCreditoPayload,
   ImprentaNotaDebitoPayload,
 } from '../imprenta.types';
-import { formatearFechaImprenta } from './factura.mapper';
+import { formatearFechaImprenta, mapearPaymentMethodImprenta } from './factura.mapper';
 
 /** Datos de nota (crédito o débito) en términos del dominio. */
 export interface DatosNotaImprenta {
@@ -51,7 +51,7 @@ function clienteYBase(d: DatosNotaImprenta) {
     reason_to: d.motivo,
     doc_num_fac: d.facturaDocNum,
     affected_control_num: d.facturaNumeroControl ?? '',
-    payment_method: d.paymentMethod,
+    payment_method: mapearPaymentMethodImprenta(d.paymentMethod),
     subtotal: d.subtotal,
     total_w_taxes: d.totalWTaxes,
     total_tax: d.totalTax,

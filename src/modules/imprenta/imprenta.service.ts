@@ -135,7 +135,14 @@ export class ImprentaService {
       throw new ImprentaError('Imprenta no disponible (mock)');
     }
     this.logger.warn(`Imprenta en modo MOCK: número de control simulado para ${docNum}`);
-    return { numeroControl: `00-${docNum}`, estatus: 'EMITIDO' };
+    return {
+      numeroControl: `00-${docNum}`,
+      estatus: 'EMITIDO',
+      idRemoto: `mock-${docNum}`,
+      hashVerificacion: `mock-${docNum}`,
+      urlPublica: '',
+      urlVerificacion: '',
+    };
   }
 
   private async post(ruta: string, payload: unknown): Promise<ImprentaRespuesta> {
@@ -143,25 +150,55 @@ export class ImprentaService {
     if (!base) {
       throw new ImprentaError('IMPRENTA_BASE_URL no configurada');
     }
+    const token = this.config.get<string>('imprenta.apiToken');
+    if (!token) {
+      throw new ImprentaError('IMPRENTA_API_TOKEN no configurado');
+    }
     const timeoutMs = this.config.get<number>('imprenta.timeoutMs') ?? 10000;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const res = await fetch(`${base}${ruta}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+          'API-T-Token': token, // auth del emisor: <id>|<secret>
+        },
         body: JSON.stringify(payload),
         signal: controller.signal,
       });
-      if (!res.ok) {
-        throw new ImprentaError(`La imprenta respondió ${res.status}`);
+
+      const cuerpo = (await res.json().catch(() => null)) as ImprentaRespuestaApi | null;
+
+      if (!res.ok || !cuerpo?.success) {
+        // La API devuelve el error de varias formas: 422 con { errors: { campo: [msg] } },
+        // o { message: "texto" }, o { message: { error: "texto" } }. Se extrae de forma
+        // robusta para nunca terminar en "[object Object]".
+        const msgs = Object.values(cuerpo?.errors ?? {})
+          .flat()
+          .map((m) => (typeof m === 'string' ? m : JSON.stringify(m)));
+        let detalle: string;
+        if (msgs.length) detalle = msgs.join('; ');
+        else if (typeof cuerpo?.message === 'string') detalle = cuerpo.message;
+        else if (cuerpo?.message && typeof cuerpo.message === 'object')
+          detalle = (cuerpo.message as { error?: string }).error ?? JSON.stringify(cuerpo.message);
+        else detalle = `HTTP ${res.status}`;
+        throw new ImprentaError(`La imprenta rechazó el documento: ${detalle}`);
       }
-      // TODO: ajustar al formato real de respuesta cuando Sirumatek lo defina.
-      const data = (await res.json()) as { numeroControl?: string; estatus?: string };
-      if (!data.numeroControl) {
+
+      const d = cuerpo.data;
+      if (!d?.control_num) {
         throw new ImprentaError('Respuesta de la imprenta sin número de control');
       }
-      return { numeroControl: data.numeroControl, estatus: data.estatus ?? 'EMITIDO' };
+      return {
+        numeroControl: d.control_num,
+        estatus: typeof cuerpo.message === 'string' ? cuerpo.message : 'EMITIDO',
+        idRemoto: d.id,
+        hashVerificacion: d.verification_hash,
+        urlPublica: d.public_url,
+        urlVerificacion: d.verification_url,
+      };
     } catch (e) {
       if (e instanceof ImprentaError) throw e;
       this.logger.error('Fallo al contactar la imprenta', e as Error);
@@ -170,4 +207,18 @@ export class ImprentaService {
       clearTimeout(timer);
     }
   }
+}
+
+/** Forma real de la respuesta de la API de Sirumatek (validada contra el sandbox). */
+interface ImprentaRespuestaApi {
+  success?: boolean;
+  message?: string | { error?: string };
+  errors?: Record<string, unknown>;
+  data?: {
+    id?: string;
+    control_num?: string;
+    verification_hash?: string;
+    public_url?: string;
+    verification_url?: string;
+  };
 }

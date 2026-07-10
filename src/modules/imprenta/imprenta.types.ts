@@ -129,7 +129,7 @@ export interface ImprentaRetencionIvaPayload extends ImprentaRetencionPartes {
   no_tax_credit_ammount: number;
   withholding_base: number;
   total_tax: number;
-  detained_total: number;
+  detanied_total: number; // sic: la API usa "detanied" (typo) SOLO en este campo top-level
   emition_date: string;
   emition_hour: string;
   iva_voucher_elements: {
@@ -165,7 +165,7 @@ export interface ImprentaRetencionIslrPayload extends ImprentaRetencionPartes {
     retention_code: string;
     payment_concept: string;
     fac_total_ammount: number;
-    retention_amount: number;
+    retention_ammount: number; // sic: doble "m" (typo del API en este ítem)
     subtracting_amount: number;
     portion_percentage: string;
   }[];
@@ -192,6 +192,7 @@ export interface ImprentaGuiaPayload {
   reason_to: string;
   adress_from: string;
   adress_to: string;
+  total_weigth: string; // peso total del despacho (sic: "weigth"). Requerido por la API.
   emition_date: string;
   emition_hour: string;
   subtotal: number;
@@ -211,10 +212,18 @@ export interface ImprentaGuiaPayload {
   }[];
 }
 
-/** Respuesta normalizada del adaptador (el formato real de la imprenta está pendiente). */
+/**
+ * Respuesta normalizada del adaptador. Formato real de la imprenta (validado contra el
+ * sandbox): { success, message, data: { control_num, id, verification_hash, public_url,
+ * verification_url, ... } }. La imprenta ASIGNA el número de control (RN-007).
+ */
 export interface ImprentaRespuesta {
-  numeroControl: string;
+  numeroControl: string; // = data.control_num
   estatus: string;
+  idRemoto?: string; // = data.id
+  hashVerificacion?: string; // = data.verification_hash
+  urlPublica?: string; // = data.public_url (PDF en el visor)
+  urlVerificacion?: string; // = data.verification_url (QR)
 }
 
 export class ImprentaError extends Error {

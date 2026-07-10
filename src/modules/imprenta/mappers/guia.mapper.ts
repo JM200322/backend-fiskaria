@@ -57,6 +57,7 @@ export function construirPayloadGuia(d: DatosGuiaImprenta): ImprentaGuiaPayload 
     reason_to: d.motivo,
     adress_from: d.direccionOrigen,
     adress_to: d.direccionDestino,
+    total_weigth: String(d.items.reduce((s, it) => s + (it.pesoKg ?? 0), 0)),
     emition_date: formatearFechaImprenta(d.fecha),
     emition_hour: d.hora,
     subtotal: d.subtotal,

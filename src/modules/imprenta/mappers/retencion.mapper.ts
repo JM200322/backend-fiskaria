@@ -50,7 +50,7 @@ export function construirPayloadRetencionIva(
     no_tax_credit_ammount: 0,
     withholding_base: d.base,
     total_tax: d.base,
-    detained_total: d.montoRetenido,
+    detanied_total: d.montoRetenido,
     emition_date: formatearFechaImprenta(d.fecha),
     emition_hour: d.hora,
     iva_voucher_elements: [
@@ -102,7 +102,7 @@ export function construirPayloadRetencionIslr(
         retention_code: d.retentionCode,
         payment_concept: d.concepto,
         fac_total_ammount: d.totalFactura,
-        retention_amount: d.montoRetenido,
+        retention_ammount: d.montoRetenido,
         subtracting_amount: d.sustraendo,
         portion_percentage: `${d.porcentaje}%`,
       },
