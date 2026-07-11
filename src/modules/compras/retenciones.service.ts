@@ -6,7 +6,7 @@ import {
 } from '@nestjs/common';
 import { CondicionFiscal, EstatusDocumento, Prisma, TipoDocumento, TipoRetencion } from '@prisma/client';
 import Decimal from 'decimal.js';
-import { redondear } from 'src/common/fiscal/calculo-fiscal';
+import { calcularMontoRetenido, redondear } from 'src/common/fiscal/calculo-fiscal';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { AuditoriaService } from '../auditoria/auditoria.service';
 import { AuthenticatedUser } from '../auth/types/authenticated-user';
@@ -83,10 +83,7 @@ export class RetencionesService {
       tipo === TipoRetencion.ISLR
         ? redondear((dto as EmitirRetencionIslrDto).sustraendo ?? 0)
         : new Decimal(0);
-    const montoRetenido = Decimal.max(
-      redondear(base.times(porcentaje).dividedBy(100)).minus(sustraendo),
-      0,
-    );
+    const montoRetenido = calcularMontoRetenido(base, porcentaje, sustraendo);
 
     const periodoYear = String(compra.fecha.getUTCFullYear());
     const periodoMonth = String(compra.fecha.getUTCMonth() + 1).padStart(2, '0');

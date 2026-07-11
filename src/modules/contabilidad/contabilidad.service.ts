@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { OrigenAsiento, Prisma, TipoCuenta } from '@prisma/client';
+import { OrigenAsiento, Prisma, TipoCuenta, TipoDocumento } from '@prisma/client';
 import Decimal from 'decimal.js';
 import { redondear } from 'src/common/fiscal/calculo-fiscal';
 import { PrismaService } from 'src/prisma/prisma.service';
@@ -186,6 +186,27 @@ export class ContabilidadService {
       this.logger.error(`Error generando asiento automático (${params.glosa})`, e as Error);
       return null;
     }
+  }
+
+  /**
+   * Red de seguridad (RN-107): facturas ya emitidas que NO tienen asiento contable.
+   * Como `registrarAutomatico` omite en silencio los asientos que no cuadran o sin cuenta
+   * mapeada, esto expone esos huecos para que un descuadre no pase desapercibido meses.
+   */
+  async documentosSinAsiento(actor: AuthenticatedUser) {
+    const contribuyenteId = this.tenantId(actor);
+    const asientos = await this.prisma.asiento.findMany({
+      where: { contribuyenteId, documentoRef: { not: null } },
+      select: { documentoRef: true },
+    });
+    const conAsiento = new Set(asientos.map((a) => a.documentoRef));
+    const facturas = await this.prisma.documentoFiscal.findMany({
+      where: { contribuyenteId, tipo: TipoDocumento.FACTURA },
+      select: { id: true, docNum: true, fecha: true, totalWTaxes: true, estatus: true },
+      orderBy: { fecha: 'desc' },
+    });
+    const documentos = facturas.filter((f) => !conAsiento.has(f.id));
+    return { total: documentos.length, documentos };
   }
 
   /**

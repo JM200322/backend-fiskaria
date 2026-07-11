@@ -86,3 +86,17 @@ export function calcularDocumento(lineas: LineaCalculo[]): ResultadoCalculo {
 export function calcularIgtf(montoEnDivisas: Decimal.Value, tasa: Decimal.Value = IGTF_TASA): string {
   return redondear(new Decimal(montoEnDivisas).times(tasa).dividedBy(100)).toFixed(2);
 }
+
+/**
+ * Monto a retener (IVA o ISLR). Para ISLR de personas naturales se resta el sustraendo
+ * (decreto 1.808) y nunca es negativo. `base` = base imponible; `porcentaje` en %;
+ * `sustraendo` en Bs (0 para IVA). Devuelve Decimal para encadenar en el servicio.
+ */
+export function calcularMontoRetenido(
+  base: Decimal.Value,
+  porcentaje: Decimal.Value,
+  sustraendo: Decimal.Value = 0,
+): Decimal {
+  const bruto = redondear(new Decimal(base).times(porcentaje).dividedBy(100));
+  return Decimal.max(bruto.minus(sustraendo), 0);
+}

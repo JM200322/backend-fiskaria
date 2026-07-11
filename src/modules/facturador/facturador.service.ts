@@ -29,24 +29,13 @@ import { TasasService } from '../tasas/tasas.service';
 import { EmitirFacturaDto, ItemFacturaDto, MetodoPagoDto } from './dto/emitir-factura.dto';
 import { EmitirGuiaDto } from './dto/emitir-guia.dto';
 import { EmitirNotaDto } from './dto/emitir-nota.dto';
+import { construirLineasAsientoVenta } from './asiento-venta';
 
 const ETIQUETA_PAGO: Record<MetodoPagoDto, string> = {
   EFECTIVO_BS: 'Efectivo Bs.',
   DIVISAS: 'Divisas',
   PAGO_MOVIL: 'Pago Móvil',
   TARJETA: 'Tarjeta',
-};
-
-/**
- * Cuenta contable (evento) por método de pago (RN-107 / tabla del Facturador en el SDD).
- * Cada método golpea una cuenta distinta; el pago mixto reparte cada parte a la suya.
- * Nombres de evento provisionales hasta la tabla definitiva del contador.
- */
-const EVENTO_PAGO: Record<MetodoPago, string> = {
-  EFECTIVO_BS: 'caja_efectivo', // 1.1.1.01 Caja
-  DIVISAS: 'caja_divisas', // 1.1.1.03 Caja Divisas
-  PAGO_MOVIL: 'banco_pago_movil', // 1.1.2.01 Bancos
-  TARJETA: 'cxc_pos', // 1.1.2.02 CxC POS
 };
 
 const incluir = { items: true, pagos: true, cliente: { select: { rif: true, nombre: true } } };
@@ -470,26 +459,12 @@ export class FacturadorService {
     igtf: Prisma.Decimal;
     pagos: { metodo: MetodoPago; monto: Prisma.Decimal }[];
   }) {
-    const lineas: { evento: string; debe?: Decimal.Value; haber?: Decimal.Value }[] = [];
-    // Debe: cada pago a la cuenta de su método (pago mixto se reparte).
-    for (const p of doc.pagos) {
-      lineas.push({ evento: EVENTO_PAGO[p.metodo], debe: p.monto });
-    }
-    // IGTF cobrado en divisas: debe en caja divisas, haber en IGTF por pagar.
-    if (new Decimal(doc.igtf).gt(0)) {
-      lineas.push({ evento: EVENTO_PAGO.DIVISAS, debe: doc.igtf });
-      lineas.push({ evento: 'igtf', haber: doc.igtf });
-    }
-    // Haber: ingreso por ventas + IVA débito fiscal.
-    lineas.push({ evento: 'venta_ingreso', haber: doc.subtotal });
-    lineas.push({ evento: 'iva_debito', haber: doc.totalTax });
-
     await this.contabilidad.registrarAutomatico({
       contribuyenteId: doc.contribuyenteId,
       fecha: doc.fecha,
       glosa: `Venta ${doc.docNum}`,
       documentoRef: doc.id,
-      lineas,
+      lineas: construirLineasAsientoVenta(doc),
     });
   }
 
@@ -661,7 +636,15 @@ export class FacturadorService {
 
       const actualizado = await this.prisma.documentoFiscal.update({
         where: { id: docId },
-        data: { numeroControl: resp.numeroControl, estatus: EstatusDocumento.ENVIADO },
+        data: {
+          numeroControl: resp.numeroControl,
+          estatus: EstatusDocumento.ENVIADO,
+          // Metadatos que devuelve la imprenta (RN-007): PDF público, hash y QR de verificación.
+          imprentaId: resp.idRemoto ?? null,
+          publicUrl: resp.urlPublica || null,
+          verificationHash: resp.hashVerificacion ?? null,
+          verificationUrl: resp.urlVerificacion || null,
+        },
         include: incluir,
       });
 

@@ -72,6 +72,15 @@ export class ContabilidadController {
     return this.contabilidad.listarAsientos(actor);
   }
 
+  @Get('asientos/documentos-sin-asiento')
+  @RequierePermisos('contabilidad:ver')
+  @ApiOperation({
+    summary: 'Facturas emitidas SIN asiento contable (red de seguridad ante omisiones silenciosas)',
+  })
+  documentosSinAsiento(@CurrentUser() actor: AuthenticatedUser) {
+    return this.contabilidad.documentosSinAsiento(actor);
+  }
+
   // Libros y declaración
   @Get('libros/ventas')
   @RequierePermisos('contabilidad:ver')

@@ -301,6 +301,10 @@ model DocumentoFiscal {
   tipo              TipoDocumento
   docNum            String            @map("doc_num") // correlativo interno (Fiskaria)
   numeroControl     String?           @map("numero_control") // lo asigna la imprenta (RN-007)
+  imprentaId        String?           @map("imprenta_id") // id remoto del documento en la imprenta
+  publicUrl         String?           @map("public_url") // URL del PDF en el visor de la imprenta
+  verificationHash  String?           @map("verification_hash") // hash de verificación
+  verificationUrl   String?           @map("verification_url") // URL/QR de verificación
   estatus           EstatusDocumento  @default(NO_ENVIADO)
   clienteTerceroId  String            @map("cliente_tercero_id")
   cliente           Tercero           @relation("ClienteDocumentos", fields: [clienteTerceroId], references: [id])
