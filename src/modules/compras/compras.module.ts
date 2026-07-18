@@ -14,5 +14,6 @@ import { RetencionesRecibidasService } from './retenciones-recibidas.service';
   imports: [PuntosEmisionModule, ContabilidadModule],
   controllers: [ComprasController, RetencionesController, RetencionesRecibidasController],
   providers: [ComprasService, RetencionesService, RetencionesRecibidasService],
+  exports: [ComprasService], // ProductosModule: lookup de línea de factura para Reponer Stock (RN-134)
 })
 export class ComprasModule {}

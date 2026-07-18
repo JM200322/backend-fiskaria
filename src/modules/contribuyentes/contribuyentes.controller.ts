@@ -40,7 +40,7 @@ export class ContribuyentesController {
 
   @Patch(':id')
   @RequierePermisos('configuracion:editar')
-  @ApiOperation({ summary: 'Actualiza razón social / domicilio fiscal (vista Configuración)' })
+  @ApiOperation({ summary: 'Actualiza perfil fiscal e integración Sirumatek (vista Configuración)' })
   actualizar(
     @Param('id') id: string,
     @Body() dto: ActualizarContribuyenteDto,

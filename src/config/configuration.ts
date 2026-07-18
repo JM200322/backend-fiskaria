@@ -70,8 +70,23 @@ export default () => ({
     baseUrl: process.env.IMPRENTA_BASE_URL ?? '',
     apiToken: process.env.IMPRENTA_API_TOKEN ?? '',
     timeoutMs: parseInt(process.env.IMPRENTA_TIMEOUT_MS ?? '10000', 10),
-    // Mientras el adaptador no esté al contrato real, se simula el número de control.
+    // true = modo mock por defecto en dev; se anula si el comercio guarda credenciales en Configuración
     mock: (process.env.IMPRENTA_MOCK ?? 'true').toLowerCase() === 'true',
+  },
+
+  // API Terceros SIGAT (sistema municipal tributario). Auth por header X-Api-Key
+  // (secreto de integración global, nunca en source) + X-Contribuyente-Id (id
+  // interno SIGAT del comercio, resuelto desde su RIF). RN-140.
+  sigat: {
+    // En prod no hay default: si falta SIGAT_BASE_URL el adaptador falla explícito
+    // en vez de hablar con staging por olvido. En dev, default cómodo al staging.
+    baseUrl:
+      process.env.SIGAT_BASE_URL ??
+      (process.env.NODE_ENV === 'production' ? '' : 'https://stage.sigat.net/api/v1/ext'),
+    apiKey: process.env.SIGAT_API_KEY ?? '',
+    timeoutMs: parseInt(process.env.SIGAT_TIMEOUT_MS ?? '15000', 10),
+    // true = modo mock por defecto en dev (no golpea el API real de la alcaldía).
+    mock: (process.env.SIGAT_MOCK ?? 'true').toLowerCase() === 'true',
   },
 
   // Microservicio externo de tasas BCV (USD/EUR). Repo aparte; el backend solo consume.

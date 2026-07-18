@@ -1,10 +1,12 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma, Producto, TipoProducto } from '@prisma/client';
 import Decimal from 'decimal.js';
+import { paginacion } from 'src/common/date-range.util';
 import { redondear } from 'src/common/fiscal/calculo-fiscal';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { AuditoriaService } from '../auditoria/auditoria.service';
 import { AuthenticatedUser } from '../auth/types/authenticated-user';
+import { ComprasService } from '../compras/compras.service';
 import { ContabilidadService } from '../contabilidad/contabilidad.service';
 import { ActualizarProductoDto } from './dto/actualizar-producto.dto';
 import { CrearProductoDto } from './dto/crear-producto.dto';
@@ -24,7 +26,19 @@ export class ProductosService {
     private readonly auditoria: AuditoriaService,
     private readonly contabilidad: ContabilidadService,
     private readonly openFoodFacts: OpenFoodFactsService,
+    private readonly compras: ComprasService,
   ) {}
+
+  /** Ver ComprasService.buscarLineaFactura — expuesto aquí porque quien llama es Reponer Stock. */
+  async buscarLineaFactura(id: string, numeroFactura: string, actor: AuthenticatedUser) {
+    const contribuyenteId = this.tenantId(actor);
+    const producto = await this.prisma.producto.findFirst({
+      where: { id, contribuyenteId, deletedAt: null },
+      select: { id: true },
+    });
+    if (!producto) throw new NotFoundException('Producto no encontrado');
+    return this.compras.buscarLineaFactura(id, numeroFactura, actor);
+  }
 
   /**
    * Busca primero en el catálogo del propio contribuyente (código de barras real
@@ -100,6 +114,8 @@ export class ProductosService {
       tipo?: TipoProducto;
       bajoStock?: boolean;
       categoriaComercialId?: string;
+      limit?: number;
+      offset?: number;
     } = {},
   ) {
     const contribuyenteId = this.tenantId(actor);
@@ -113,11 +129,13 @@ export class ProductosService {
         { codigoBarras: { contains: opts.q, mode: 'insensitive' } },
       ];
     }
+    const { take, skip } = paginacion(opts.limit, opts.offset);
     const productos = await this.prisma.producto.findMany({
       where,
       include: incluirRelaciones,
-      orderBy: { nombre: 'asc' },
-      take: 100,
+      orderBy: [{ nombre: 'asc' }, { id: 'asc' }], // desempate estable para paginar por skip/take
+      take,
+      skip,
     });
     const conIva = productos.map((p) => this.conIva(p));
     return opts.bajoStock ? conIva.filter((p) => p.bajoStock) : conIva;
@@ -199,16 +217,33 @@ export class ProductosService {
     const ivaCredito = redondear(dto.ivaCredito ?? 0);
     const fecha = new Date();
 
-    const [productoActualizado, movimiento] = await this.prisma.$transaction([
-      this.prisma.producto.update({
+    const { productoActualizado, movimiento } = await this.prisma.$transaction(async (tx) => {
+      if (dto.compraItemId) {
+        // SELECT ... FOR UPDATE serializa reposiciones concurrentes contra la
+        // MISMA línea de factura — sin esto, dos reposiciones simultáneas
+        // podrían leer el mismo "restante" antes de que la otra confirme y
+        // sobregirar la factura (mismo TOCTOU que agregarPago ya resuelve).
+        const bloqueada = await tx.$queryRaw<{ id: string }[]>`
+          SELECT ci.id FROM compra_items ci
+          JOIN compras c ON c.id = ci.compra_id
+          WHERE ci.id = ${dto.compraItemId} AND ci.producto_id = ${id} AND c.contribuyente_id = ${contribuyenteId}
+          FOR UPDATE
+        `;
+        if (bloqueada.length === 0) {
+          throw new BadRequestException('La línea de factura indicada no es válida para este producto');
+        }
+        await this.assertCantidadDentroDeFactura(tx, dto.compraItemId, dto.cantidad);
+      }
+
+      const productoActualizado = await tx.producto.update({
         where: { id },
         data: {
           stock: { increment: dto.cantidad },
           costoUltimo: dto.costoUnitario,
         },
         include: incluirRelaciones,
-      }),
-      this.prisma.movimientoInventario.create({
+      });
+      const movimiento = await tx.movimientoInventario.create({
         data: {
           contribuyenteId,
           productoId: id,
@@ -217,10 +252,12 @@ export class ProductosService {
           costoTotal: costoTotal.toFixed(2),
           ivaCredito: ivaCredito.toFixed(2),
           referencia: dto.referencia,
+          compraItemId: dto.compraItemId,
           fecha,
         },
-      }),
-    ]);
+      });
+      return { productoActualizado, movimiento };
+    });
 
     // Libro Diario (RN-107): best-effort, no bloquea la reposición si falta config.
     await this.contabilidad.registrarAutomatico({
@@ -274,7 +311,7 @@ export class ProductosService {
   /** Alícuota de IVA efectiva: override del producto, o la de su categoría fiscal (RN-102). */
   private conIva(producto: Producto & { categoriaFiscal: { alicuotaIva: Prisma.Decimal } }) {
     const iva = producto.ivaOverride ?? producto.categoriaFiscal.alicuotaIva;
-    // Stock en negativo es "bajo stock" siempre, incluso sin punto de reorden
+    // Stock en negativo es "bajo stock" siempre, incluso sin stock mínimo
     // configurado (stockMinimo=0) — de lo contrario un producto sobrevendido
     // desaparece por completo del radar de "Bajo stock".
     const bajoStock =
@@ -326,6 +363,37 @@ export class ProductosService {
     if (conflicto) {
       throw new BadRequestException(
         `Este código de barras ya está asignado a "${conflicto.nombre}". Si es el correcto para este producto, genera uno nuevo para "${conflicto.nombre}" — así cada producto conserva un código único.`,
+      );
+    }
+  }
+
+  /**
+   * RN-134: la cantidad repuesta contra una línea de factura no puede superar
+   * lo facturado. Recibe `tx` (el cliente de la transacción que YA tomó el
+   * lock FOR UPDATE sobre la línea, ver reponerStock) para que esta lectura
+   * quede serializada respecto a otra reposición concurrente — leer fuera de
+   * esa transacción permitiría a dos reposiciones ver el mismo "restante"
+   * antes de que la otra confirme.
+   */
+  private async assertCantidadDentroDeFactura(
+    tx: Prisma.TransactionClient,
+    compraItemId: string,
+    cantidad: number,
+  ) {
+    const item = await tx.compraItem.findFirst({
+      where: { id: compraItemId },
+      include: { compra: { include: { proveedor: { select: { nombre: true } } } }, movimientos: true },
+    });
+    if (!item) {
+      throw new BadRequestException('La línea de factura indicada no es válida para este producto');
+    }
+    const repuesta = item.movimientos.reduce((acc, m) => acc.plus(m.cantidad), new Decimal(0));
+    const restante = new Decimal(item.cantidad).minus(repuesta);
+    if (new Decimal(cantidad).gt(restante)) {
+      throw new BadRequestException(
+        `La factura ${item.compra.numeroFactura} de ${item.compra.proveedor.nombre} indica ` +
+          `${item.cantidad} unidades de este producto y ya se repusieron ${repuesta.toFixed(3)} — ` +
+          `quedan ${restante.toFixed(3)} por reponer.`,
       );
     }
   }

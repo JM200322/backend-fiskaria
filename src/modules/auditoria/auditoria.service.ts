@@ -26,13 +26,14 @@ export class AuditoriaService {
   /** Consulta del registro de auditoría, acotada por comercio (Sirumatek ve todo). */
   consultar(
     contribuyenteId: string | null,
-    filtros: { accion?: string; entidad?: string } = {},
+    filtros: { accion?: string; entidad?: string; entidadId?: string } = {},
   ) {
     return this.prisma.registroAuditoria.findMany({
       where: {
         ...(contribuyenteId ? { contribuyenteId } : {}),
         accion: filtros.accion,
         entidad: filtros.entidad,
+        entidadId: filtros.entidadId,
       },
       orderBy: { fechaHora: 'desc' },
       take: 100,

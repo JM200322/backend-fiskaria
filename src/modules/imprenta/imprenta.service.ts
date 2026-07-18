@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import {
-  ImprentaError,
+import { PrismaService } from 'src/prisma/prisma.service';
+import {  ImprentaError,
   ImprentaFacturaPayload,
   ImprentaGuiaPayload,
   ImprentaNotaCreditoPayload,
@@ -15,78 +15,100 @@ import {
  * Adaptador de la Imprenta Digital (capa anticorrupción): aísla los nombres "con rarezas"
  * del API y el transporte HTTP. El resto del sistema no conoce el contrato externo.
  *
- * Modo mock (dev): simula la asignación del número de control sin llamar a la imprenta real
- * (cuyo contrato aún está incompleto: URL, auth, formato de respuesta).
- * Para probar el camino "no enviado", el mock falla si el RIF del cliente contiene "999".
+ * Modo mock (dev): solo si IMPRENTA_MOCK=true y el comercio no tiene credenciales en
+ * Configuración. Las credenciales por tenant anulan el mock global.
  */
 @Injectable()
 export class ImprentaService {
   private readonly logger = new Logger(ImprentaService.name);
 
-  constructor(private readonly config: ConfigService) {}
+  constructor(
+    private readonly config: ConfigService,
+    private readonly prisma: PrismaService,
+  ) {}
 
-  async generarFactura(payload: ImprentaFacturaPayload): Promise<ImprentaRespuesta> {
-    if (this.config.get<boolean>('imprenta.mock')) {
+  async generarFactura(contribuyenteId: string, payload: ImprentaFacturaPayload): Promise<ImprentaRespuesta> {
+    if (await this.debeUsarMock(contribuyenteId)) {
       return this.simular(payload.doc_num, payload.client_id_num);
     }
-    return this.post('/generateBill', payload);
+    return this.post(contribuyenteId, '/api/generateBill', payload);
   }
 
-  async generarNotaCredito(payload: ImprentaNotaCreditoPayload): Promise<ImprentaRespuesta> {
-    if (this.config.get<boolean>('imprenta.mock')) {
+  async generarNotaCredito(
+    contribuyenteId: string,
+    payload: ImprentaNotaCreditoPayload,
+  ): Promise<ImprentaRespuesta> {
+    if (await this.debeUsarMock(contribuyenteId)) {
       return this.simular(payload.doc_num, payload.client_id_num);
     }
-    return this.post('/generateCreditNote', payload);
+    return this.post(contribuyenteId, '/api/generateCreditNote', payload);
   }
 
-  async generarNotaDebito(payload: ImprentaNotaDebitoPayload): Promise<ImprentaRespuesta> {
-    if (this.config.get<boolean>('imprenta.mock')) {
+  async generarNotaDebito(
+    contribuyenteId: string,
+    payload: ImprentaNotaDebitoPayload,
+  ): Promise<ImprentaRespuesta> {
+    if (await this.debeUsarMock(contribuyenteId)) {
       return this.simular(payload.doc_num, payload.client_id_num);
     }
-    return this.post('/generateDebitNote', payload);
+    return this.post(contribuyenteId, '/api/generateDebitNote', payload);
   }
 
-  async generarRetencionIva(payload: ImprentaRetencionIvaPayload): Promise<ImprentaRespuesta> {
-    if (this.config.get<boolean>('imprenta.mock')) {
+  async generarRetencionIva(
+    contribuyenteId: string,
+    payload: ImprentaRetencionIvaPayload,
+  ): Promise<ImprentaRespuesta> {
+    if (await this.debeUsarMock(contribuyenteId)) {
       return this.simular(payload.doc_num, payload.beneficiary_doc_id);
     }
-    return this.post('/generateVoucherIVA', payload);
+    return this.post(contribuyenteId, '/api/generateVoucherIVA', payload);
   }
 
-  async generarRetencionIslr(payload: ImprentaRetencionIslrPayload): Promise<ImprentaRespuesta> {
-    if (this.config.get<boolean>('imprenta.mock')) {
+  async generarRetencionIslr(
+    contribuyenteId: string,
+    payload: ImprentaRetencionIslrPayload,
+  ): Promise<ImprentaRespuesta> {
+    if (await this.debeUsarMock(contribuyenteId)) {
       return this.simular(payload.doc_num, payload.beneficiary_doc_id);
     }
-    return this.post('/generateVoucherIslr', payload);
+    return this.post(contribuyenteId, '/api/generateVoucherIslr', payload);
   }
 
-  async generarGuiaDespacho(payload: ImprentaGuiaPayload): Promise<ImprentaRespuesta> {
-    if (this.config.get<boolean>('imprenta.mock')) {
+  async generarGuiaDespacho(contribuyenteId: string, payload: ImprentaGuiaPayload): Promise<ImprentaRespuesta> {
+    if (await this.debeUsarMock(contribuyenteId)) {
       return this.simular(payload.doc_num, payload.client_id_num);
     }
-    return this.post('/generateShippingOrder', payload);
+    return this.post(contribuyenteId, '/api/generateShippingOrder', payload);
   }
 
   /** Comprueba si la imprenta Sirumatek está alcanzable (para el indicador del facturador). */
-  async verificarConexion() {
-    const mock = this.config.get<boolean>('imprenta.mock');
-    const base = this.config.get<string>('imprenta.baseUrl');
+  async verificarConexion(contribuyenteId: string) {
+    const creds = await this.resolverCredenciales(contribuyenteId);
     const verificadoEn = new Date().toISOString();
 
-    if (mock) {
+    if (await this.debeUsarMock(contribuyenteId)) {
       return {
         estado: 'mock' as const,
         mock: true,
-        mensaje: 'Modo simulación activo (sin enlace con Sirumatek)',
+        mensaje: 'Modo simulación activo (sin credenciales de imprenta en Configuración)',
         verificadoEn,
       };
     }
 
-    if (!base) {
+    if (!creds?.baseUrl) {
       return {
         estado: 'unconfigured' as const,
         mock: false,
-        mensaje: 'IMPRENTA_BASE_URL no configurada en el servidor',
+        mensaje: 'Configure la URL de la imprenta en Configuración',
+        verificadoEn,
+      };
+    }
+
+    if (!creds.token) {
+      return {
+        estado: 'unconfigured' as const,
+        mock: false,
+        mensaje: 'Configure el token API-T-Token en Configuración',
         verificadoEn,
       };
     }
@@ -97,7 +119,11 @@ export class ImprentaService {
     const timer = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
-      const res = await fetch(base, { method: 'GET', signal: controller.signal });
+      const res = await fetch(`${creds.baseUrl}/up`, {
+        method: 'GET',
+        headers: { Accept: 'application/json', 'API-T-Token': creds.token },
+        signal: controller.signal,
+      });
       const latenciaMs = Date.now() - inicio;
 
       if (res.ok || res.status < 500) {
@@ -145,25 +171,59 @@ export class ImprentaService {
     };
   }
 
-  private async post(ruta: string, payload: unknown): Promise<ImprentaRespuesta> {
-    const base = this.config.get<string>('imprenta.baseUrl');
-    if (!base) {
-      throw new ImprentaError('IMPRENTA_BASE_URL no configurada');
+  private async debeUsarMock(contribuyenteId: string): Promise<boolean> {
+    if (!this.config.get<boolean>('imprenta.mock')) return false;
+    const row = await this.prisma.contribuyente.findUnique({
+      where: { id: contribuyenteId },
+      select: { imprentaBaseUrl: true, imprentaApiToken: true },
+    });
+    const tieneCredsEnBd = Boolean(row?.imprentaBaseUrl?.trim() && row?.imprentaApiToken?.trim());
+    // Credenciales guardadas en Configuración anulan el mock global del .env.
+    return !tieneCredsEnBd;
+  }
+
+  private normalizarBaseUrl(url: string): string {
+    return url.replace(/\/+$/, '');
+  }
+
+  private async resolverCredenciales(contribuyenteId: string) {
+    const row = await this.prisma.contribuyente.findUnique({
+      where: { id: contribuyenteId },
+      select: { imprentaBaseUrl: true, imprentaApiToken: true },
+    });
+
+    const baseUrl = this.normalizarBaseUrl(
+      row?.imprentaBaseUrl?.trim() || this.config.get<string>('imprenta.baseUrl')?.trim() || '',
+    );
+    const token =
+      row?.imprentaApiToken?.trim() || this.config.get<string>('imprenta.apiToken')?.trim() || '';
+
+    if (!baseUrl && !token) return null;
+    return { baseUrl, token };
+  }
+
+  private async post(
+    contribuyenteId: string,
+    ruta: string,
+    payload: unknown,
+  ): Promise<ImprentaRespuesta> {
+    const creds = await this.resolverCredenciales(contribuyenteId);
+    if (!creds?.baseUrl) {
+      throw new ImprentaError('URL de imprenta no configurada');
     }
-    const token = this.config.get<string>('imprenta.apiToken');
-    if (!token) {
-      throw new ImprentaError('IMPRENTA_API_TOKEN no configurado');
+    if (!creds.token) {
+      throw new ImprentaError('Token de imprenta no configurado');
     }
     const timeoutMs = this.config.get<number>('imprenta.timeoutMs') ?? 10000;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      const res = await fetch(`${base}${ruta}`, {
+      const res = await fetch(`${creds.baseUrl}${ruta}`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           Accept: 'application/json',
-          'API-T-Token': token, // auth del emisor: <id>|<secret>
+          'API-T-Token': creds.token,
         },
         body: JSON.stringify(payload),
         signal: controller.signal,

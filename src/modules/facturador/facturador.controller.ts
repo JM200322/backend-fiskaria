@@ -90,6 +90,22 @@ export class FacturadorController {
     return this.facturador.obtener(id, actor);
   }
 
+  @Get(':id/error-envio')
+  @RequierePermisos('facturas:ver')
+  @ApiOperation({ summary: 'Motivo real por el que un documento quedó "No enviado" (auditoría)' })
+  obtenerErrorEnvio(@Param('id') id: string, @CurrentUser() actor: AuthenticatedUser) {
+    return this.facturador.obtenerErrorEnvio(id, actor);
+  }
+
+  @Get(':id/payload-imprenta')
+  @RequierePermisos('facturas:ver')
+  @ApiOperation({
+    summary: 'JSON enviado a Sirumatek (solo administración del sistema — RN-125)',
+  })
+  obtenerPayloadImprenta(@Param('id') id: string, @CurrentUser() actor: AuthenticatedUser) {
+    return this.facturador.obtenerPayloadImprenta(id, actor);
+  }
+
   @Post('reprocesar-no-enviados')
   @RequierePermisos('facturas:crear')
   @ApiOperation({ summary: 'Reprocesar manualmente todos los documentos "No enviado"' })

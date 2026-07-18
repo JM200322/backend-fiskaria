@@ -6,7 +6,7 @@ import {
   ServiceUnavailableException,
   UnprocessableEntityException,
 } from '@nestjs/common';
-import { PeriodoIva, TipoContribuyente } from '@prisma/client';
+import { PeriodoIva, Prisma, TipoContribuyente } from '@prisma/client';
 import { normalizarRif } from 'src/common/fiscal/rif.util';
 import { AuditoriaService } from '../auditoria/auditoria.service';
 import { AuthenticatedUser } from '../auth/types/authenticated-user';
@@ -15,6 +15,7 @@ import { ResultadoValidacionSeniat, SeniatValidationError } from '../seniat/seni
 import { PrismaService } from 'src/prisma/prisma.service';
 import { ActualizarContribuyenteDto } from './dto/actualizar-contribuyente.dto';
 import { CrearContribuyenteDto } from './dto/crear-contribuyente.dto';
+import { sanitizarContribuyente } from './contribuyente.mapper';
 
 @Injectable()
 export class ContribuyentesService {
@@ -76,15 +77,15 @@ export class ContribuyentesService {
       detalle: { rif, validado },
     });
 
-    return contribuyente;
+    return sanitizarContribuyente(contribuyente);
   }
 
   /** Re-dispara la validación SENIAT de un contribuyente (p. ej. uno "pendiente") — RN-101. */
   async validar(id: string, actor: AuthenticatedUser, ip?: string) {
-    const contribuyente = await this.obtener(id, actor);
+    const perfil = await this.obtener(id, actor);
 
     try {
-      await this.seniat.validarRif(contribuyente.rif);
+      await this.seniat.validarRif(perfil.rif);
     } catch (e) {
       if (e instanceof SeniatValidationError) {
         if (e.code === 'NO_DISPONIBLE') throw new ServiceUnavailableException(e.message);
@@ -107,7 +108,7 @@ export class ContribuyentesService {
       entidadId: id,
     });
 
-    return actualizado;
+    return sanitizarContribuyente(actualizado);
   }
 
   /** Edita razón social / domicilio (vista Configuración). No toca RIF ni estado `validado`. */
@@ -119,12 +120,19 @@ export class ContribuyentesService {
   ) {
     await this.obtener(id, actor); // valida existencia + scope
 
+    const data: Prisma.ContribuyenteUpdateInput = {};
+    if (dto.razonSocial !== undefined) data.razonSocial = dto.razonSocial;
+    if (dto.domicilioFiscal !== undefined) data.domicilioFiscal = dto.domicilioFiscal;
+    if (dto.imprentaBaseUrl !== undefined) {
+      data.imprentaBaseUrl = dto.imprentaBaseUrl || null;
+    }
+    if (dto.imprentaApiToken) {
+      data.imprentaApiToken = dto.imprentaApiToken;
+    }
+
     const actualizado = await this.prisma.contribuyente.update({
       where: { id },
-      data: {
-        razonSocial: dto.razonSocial,
-        domicilioFiscal: dto.domicilioFiscal,
-      },
+      data,
     });
 
     await this.auditoria.registrar({
@@ -134,10 +142,15 @@ export class ContribuyentesService {
       accion: 'actualizar_contribuyente',
       entidad: 'contribuyente',
       entidadId: id,
-      detalle: { razonSocial: dto.razonSocial, domicilioFiscal: dto.domicilioFiscal },
+      detalle: {
+        razonSocial: dto.razonSocial,
+        domicilioFiscal: dto.domicilioFiscal,
+        imprentaBaseUrl: dto.imprentaBaseUrl,
+        imprentaTokenActualizado: Boolean(dto.imprentaApiToken?.trim()),
+      },
     });
 
-    return actualizado;
+    return sanitizarContribuyente(actualizado);
   }
 
   /** Obtiene un contribuyente respetando el scope multi-tenant (RN-122/125). */
@@ -147,15 +160,15 @@ export class ContribuyentesService {
     if (!contribuyente) {
       throw new NotFoundException('Contribuyente no encontrado');
     }
-    return contribuyente;
+    return sanitizarContribuyente(contribuyente);
   }
 
   /** Lista contribuyentes: Sirumatek ve todos; un comercio solo el suyo. */
   async listar(actor: AuthenticatedUser) {
-    if (actor.contribuyenteId) {
-      return this.prisma.contribuyente.findMany({ where: { id: actor.contribuyenteId } });
-    }
-    return this.prisma.contribuyente.findMany({ orderBy: { createdAt: 'desc' } });
+    const rows = actor.contribuyenteId
+      ? await this.prisma.contribuyente.findMany({ where: { id: actor.contribuyenteId } })
+      : await this.prisma.contribuyente.findMany({ orderBy: { createdAt: 'desc' } });
+    return rows.map(sanitizarContribuyente);
   }
 
   /** Un usuario de comercio solo accede a su propio contribuyente; Sirumatek a cualquiera. */

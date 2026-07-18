@@ -68,6 +68,13 @@ export class RetencionesService {
       );
     }
 
+    const existente = await this.prisma.comprobanteRetencion.findFirst({
+      where: { compraId: compra.id, tipo },
+    });
+    if (existente) {
+      throw new BadRequestException(`Ya se emitió una retención de ${tipo} para esta compra`);
+    }
+
     const punto = await this.prisma.puntoEmision.findFirst({
       where: { id: dto.puntoEmisionId, contribuyenteId },
     });
@@ -88,42 +95,56 @@ export class RetencionesService {
       0,
     );
 
-    const periodoYear = String(compra.fecha.getUTCFullYear());
-    const periodoMonth = String(compra.fecha.getUTCMonth() + 1).padStart(2, '0');
+    // Período = mes de emisión de la retención (lo que se entera a SENIAT ese mes),
+    // no el mes de la factura del proveedor referenciada — evita que un backlog
+    // procesado después de fin de mes desaparezca del panel "mes en curso".
     const ahora = new Date();
+    const periodoYear = String(ahora.getUTCFullYear());
+    const periodoMonth = String(ahora.getUTCMonth() + 1).padStart(2, '0');
     const hora = ahora.toISOString().slice(11, 19);
     const tipoDoc =
       tipo === TipoRetencion.IVA ? TipoDocumento.RETENCION_IVA : TipoDocumento.RETENCION_ISLR;
 
-    const creado = await this.prisma.$transaction(async (tx) => {
-      const { numero } = await this.numeracion.siguiente(punto.id, tipoDoc, tx);
-      const docNum = `${periodoYear}${periodoMonth}${String(numero).padStart(8, '0')}`;
-      return tx.comprobanteRetencion.create({
-        data: {
-          contribuyenteId,
-          compraId: compra.id,
-          tipo,
-          docNum,
-          estatus: EstatusDocumento.NO_ENVIADO,
-          periodoYear,
-          periodoMonth,
-          beneficiarioTerceroId: compra.proveedorTerceroId,
-          facDocumentNum: compra.numeroFactura,
-          facControlNum: compra.numeroControl as string,
-          base: base.toFixed(2),
-          porcentaje: porcentaje.toFixed(2),
-          montoRetenido: montoRetenido.toFixed(2),
-          conceptoIslr: tipo === TipoRetencion.ISLR ? (dto as EmitirRetencionIslrDto).concepto : null,
-          sustraendo: sustraendo.toFixed(2),
-          condicionFiscal:
-            tipo === TipoRetencion.ISLR
-              ? ((dto as EmitirRetencionIslrDto).condicionFiscal as CondicionFiscal)
-              : null,
-          fecha: ahora,
-          hora,
-        },
+    let creado;
+    try {
+      creado = await this.prisma.$transaction(async (tx) => {
+        const { numero } = await this.numeracion.siguiente(punto.id, tipoDoc, tx);
+        const docNum = `${periodoYear}${periodoMonth}${String(numero).padStart(8, '0')}`;
+        return tx.comprobanteRetencion.create({
+          data: {
+            contribuyenteId,
+            compraId: compra.id,
+            tipo,
+            docNum,
+            estatus: EstatusDocumento.NO_ENVIADO,
+            periodoYear,
+            periodoMonth,
+            beneficiarioTerceroId: compra.proveedorTerceroId,
+            facDocumentNum: compra.numeroFactura,
+            facControlNum: compra.numeroControl as string,
+            base: base.toFixed(2),
+            porcentaje: porcentaje.toFixed(2),
+            montoRetenido: montoRetenido.toFixed(2),
+            conceptoIslr: tipo === TipoRetencion.ISLR ? (dto as EmitirRetencionIslrDto).concepto : null,
+            sustraendo: sustraendo.toFixed(2),
+            condicionFiscal:
+              tipo === TipoRetencion.ISLR
+                ? ((dto as EmitirRetencionIslrDto).condicionFiscal as CondicionFiscal)
+                : null,
+            fecha: ahora,
+            hora,
+          },
+        });
       });
-    });
+    } catch (e) {
+      // Cierra el TOCTOU del check findFirst de arriba: si dos requests concurrentes
+      // pasan el check, la constraint parcial (compra_id, tipo) de la migración
+      // comprobante_retencion_compra_unica rechaza la segunda inserción con P2002.
+      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
+        throw new BadRequestException(`Ya se emitió una retención de ${tipo} para esta compra`);
+      }
+      throw e;
+    }
 
     return this.transmitir(creado.id, agente, compra, actor, ip);
   }
@@ -174,8 +195,9 @@ export class RetencionesService {
     try {
       const resp =
         r.tipo === TipoRetencion.IVA
-          ? await this.imprenta.generarRetencionIva(construirPayloadRetencionIva(datos))
+          ? await this.imprenta.generarRetencionIva(r.contribuyenteId, construirPayloadRetencionIva(datos))
           : await this.imprenta.generarRetencionIslr(
+              r.contribuyenteId,
               construirPayloadRetencionIslr({
                 ...datos,
                 sustraendo: Number(r.sustraendo),

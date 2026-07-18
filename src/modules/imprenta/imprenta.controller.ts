@@ -1,6 +1,8 @@
-import { Controller, Get } from '@nestjs/common';
+import { Controller, ForbiddenException, Get } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { RequierePermisos } from '../auth/decorators/require-permisos.decorator';
+import { AuthenticatedUser } from '../auth/types/authenticated-user';
 import { ImprentaService } from './imprenta.service';
 
 @ApiTags('imprenta')
@@ -12,7 +14,11 @@ export class ImprentaController {
   @Get('estado')
   @RequierePermisos('facturas:ver')
   @ApiOperation({ summary: 'Estado de conexión con la imprenta digital Sirumatek' })
-  estado() {
-    return this.imprenta.verificarConexion();
+  estado(@CurrentUser() actor: AuthenticatedUser) {
+    const contribuyenteId = actor.contribuyenteId;
+    if (!contribuyenteId) {
+      throw new ForbiddenException('Solo usuarios de comercio pueden consultar la imprenta');
+    }
+    return this.imprenta.verificarConexion(contribuyenteId);
   }
 }

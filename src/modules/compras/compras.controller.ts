@@ -1,5 +1,5 @@
-import { Body, Controller, Get, Ip, Param, Post } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { Body, Controller, Get, Ip, Param, Post, Query } from '@nestjs/common';
+import { ApiBearerAuth, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { RequierePermisos } from '../auth/decorators/require-permisos.decorator';
 import { AuthenticatedUser } from '../auth/types/authenticated-user';
@@ -25,9 +25,34 @@ export class ComprasController {
 
   @Get()
   @RequierePermisos('compras:ver')
-  @ApiOperation({ summary: 'Listar compras' })
-  listar(@CurrentUser() actor: AuthenticatedUser) {
-    return this.compras.listar(actor);
+  @ApiOperation({ summary: 'Listar compras (paginado, con rango de fechas)' })
+  @ApiQuery({ name: 'desde', required: false, description: 'Fecha desde YYYY-MM-DD (inclusive)' })
+  @ApiQuery({ name: 'hasta', required: false, description: 'Fecha hasta YYYY-MM-DD (inclusive)' })
+  @ApiQuery({ name: 'limit', required: false, description: 'Máx. registros 1-200 (default 100)' })
+  @ApiQuery({ name: 'offset', required: false, description: 'Desplazamiento para paginar (default 0)' })
+  listar(
+    @CurrentUser() actor: AuthenticatedUser,
+    @Query('desde') desde?: string,
+    @Query('hasta') hasta?: string,
+    @Query('limit') limit?: string,
+    @Query('offset') offset?: string,
+  ) {
+    return this.compras.listar(actor, {
+      desde,
+      hasta,
+      limit: limit !== undefined ? Number(limit) : undefined,
+      offset: offset !== undefined ? Number(offset) : undefined,
+    });
+  }
+
+  @Get('kpis')
+  @RequierePermisos('compras:ver')
+  @ApiOperation({
+    summary: 'KPIs agregados de compras (mes en curso, por pagar, top proveedores) — SUM/GROUP BY sobre todo el dataset del tenant, no solo la página cargada',
+  })
+  @ApiQuery({ name: 'topLimit', required: false, description: 'Cantidad de proveedores en el ranking (default 4)' })
+  kpis(@CurrentUser() actor: AuthenticatedUser, @Query('topLimit') topLimit?: string) {
+    return this.compras.kpis(actor, { topLimit: topLimit !== undefined ? Number(topLimit) : undefined });
   }
 
   @Get(':id')

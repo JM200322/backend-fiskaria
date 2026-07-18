@@ -16,11 +16,13 @@ export class AuditoriaController {
   @ApiOperation({ summary: 'Consultar el registro de auditoría (acotado por comercio)' })
   @ApiQuery({ name: 'accion', required: false })
   @ApiQuery({ name: 'entidad', required: false })
+  @ApiQuery({ name: 'entidadId', required: false })
   consultar(
     @CurrentUser() actor: AuthenticatedUser,
     @Query('accion') accion?: string,
     @Query('entidad') entidad?: string,
+    @Query('entidadId') entidadId?: string,
   ) {
-    return this.auditoria.consultar(actor.contribuyenteId, { accion, entidad });
+    return this.auditoria.consultar(actor.contribuyenteId, { accion, entidad, entidadId });
   }
 }

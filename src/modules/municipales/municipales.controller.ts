@@ -42,6 +42,14 @@ export class MunicipalesController {
     return this.municipales.calcular(dto, actor, ip);
   }
 
+  @Get('impuestos-municipales/base-sugerida')
+  @RequierePermisos('municipales:ver')
+  @ApiOperation({ summary: 'Base imponible sugerida (ingresos brutos reales del período)' })
+  @ApiQuery({ name: 'periodo', required: true, description: 'Período YYYY-MM' })
+  baseSugerida(@CurrentUser() actor: AuthenticatedUser, @Query('periodo') periodo: string) {
+    return this.municipales.baseSugerida(actor, periodo);
+  }
+
   @Get('impuestos-municipales')
   @RequierePermisos('municipales:ver')
   @ApiOperation({ summary: 'Listar impuestos municipales' })

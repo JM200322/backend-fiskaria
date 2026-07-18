@@ -1,4 +1,4 @@
-import { Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import Decimal from 'decimal.js';
 import { PrismaService } from 'src/prisma/prisma.service';
@@ -15,6 +15,16 @@ export interface TasasDia {
   USD: TasaDiaria | null;
   EUR: TasaDiaria | null;
   fuente?: 'microservicio' | 'cache'; // de dónde salieron (trazabilidad)
+}
+
+/** Respuesta no-2xx del microservicio tasas-bcv, con el status preservado. */
+class TasasBcvHttpError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
+    super(message);
+  }
 }
 
 /**
@@ -50,9 +60,19 @@ export class TasasService {
     if (this.config.get<boolean>('tasasBcv.mock')) {
       return { ...this.mock(fecha), fuente: 'microservicio' };
     }
-    const data = await this.get<TasasDia>(`/api/tasas/fecha/${fecha}`);
-    await this.persistir(data);
-    return { ...data, fuente: 'microservicio' };
+    try {
+      const data = await this.get<TasasDia>(`/api/tasas/fecha/${fecha}`);
+      await this.persistir(data);
+      return { ...data, fuente: 'microservicio' };
+    } catch (e) {
+      // El BCV no publica tasa fines de semana/feriados — es un "no existe" de
+      // negocio, no una falla del servicio; se traduce a 404 en vez del 500
+      // genérico que dejaría el catch-all (RN-117 solo cubre `ultimas()`).
+      if (e instanceof TasasBcvHttpError && e.status === 404) {
+        throw new NotFoundException(`No hay tasa BCV publicada para ${fecha}`);
+      }
+      throw e;
+    }
   }
 
   /** Devuelve la tasa vigente de una moneda como número (para cálculos). */
@@ -68,7 +88,7 @@ export class TasasService {
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const res = await fetch(`${base}${ruta}`, { signal: controller.signal });
-      if (!res.ok) throw new Error(`tasas-bcv respondió ${res.status}`);
+      if (!res.ok) throw new TasasBcvHttpError(res.status, `tasas-bcv respondió ${res.status}`);
       return (await res.json()) as T;
     } finally {
       clearTimeout(timer);

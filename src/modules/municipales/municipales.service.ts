@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { EstadoImpuesto } from '@prisma/client';
+import { EstadoImpuesto, EstatusDocumento, TipoDocumento } from '@prisma/client';
 import Decimal from 'decimal.js';
 import { redondear } from 'src/common/fiscal/calculo-fiscal';
 import { PrismaService } from 'src/prisma/prisma.service';
@@ -59,6 +59,53 @@ export class MunicipalesService {
     });
     await this.audit(actor, ip, 'calcular_impuesto_municipal', impuesto.id, { periodo: dto.periodo });
     return impuesto;
+  }
+
+  /**
+   * Base imponible sugerida del IAE: ingresos brutos reales del período tomados
+   * de las facturas emitidas (subtotal neto de IVA/IGTF), Facturas + Notas de
+   * Débito menos Notas de Crédito. Es una sugerencia editable, no autoritativa.
+   */
+  async baseSugerida(actor: AuthenticatedUser, periodo: string) {
+    const contribuyenteId = this.tenantId(actor);
+    const m = /^(\d{4})-(\d{2})$/.exec(periodo);
+    if (!m) throw new BadRequestException('periodo debe ser YYYY-MM');
+    const year = Number(m[1]);
+    const month = Number(m[2]);
+    if (month < 1 || month > 12) throw new BadRequestException('periodo inválido');
+
+    const desde = new Date(Date.UTC(year, month - 1, 1));
+    const hasta = new Date(Date.UTC(year, month, 1));
+
+    // Solo ENVIADO: hoy es el único estatus con número de control y valor fiscal.
+    // Revisar al implementar reverso (ANULADO_POR_REVERSO) o CONTINGENCIA, que aún
+    // no se asignan en el backend. GUIA_DESPACHO y retenciones quedan fuera a propósito.
+    const sumar = (tipos: TipoDocumento[]) =>
+      this.prisma.documentoFiscal.aggregate({
+        where: {
+          contribuyenteId,
+          estatus: EstatusDocumento.ENVIADO,
+          tipo: { in: tipos },
+          fecha: { gte: desde, lt: hasta },
+        },
+        _sum: { subtotal: true },
+        _count: true,
+      });
+
+    const [positivos, notasCredito] = await Promise.all([
+      sumar([TipoDocumento.FACTURA, TipoDocumento.NOTA_DEBITO]),
+      sumar([TipoDocumento.NOTA_CREDITO]),
+    ]);
+
+    const ingresos = new Decimal(positivos._sum.subtotal ?? 0).minus(
+      notasCredito._sum.subtotal ?? 0,
+    );
+
+    return {
+      periodo,
+      ingresosBrutos: Decimal.max(ingresos, 0).toFixed(2),
+      documentos: positivos._count + notasCredito._count,
+    };
   }
 
   listarImpuestos(actor: AuthenticatedUser, estado?: EstadoImpuesto) {

@@ -1,5 +1,5 @@
 import { ApiPropertyOptional, ApiProperty } from '@nestjs/swagger';
-import { IsNumber, IsOptional, IsPositive, IsString, Min } from 'class-validator';
+import { IsNumber, IsOptional, IsPositive, IsString, IsUUID, Min } from 'class-validator';
 
 export class ReponerStockDto {
   @ApiProperty({ example: 24, description: 'Unidades que entran al inventario' })
@@ -22,4 +22,13 @@ export class ReponerStockDto {
   @IsOptional()
   @IsString()
   referencia?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'ID de la línea de factura (CompraItem) que esta reposición cubre — si viene, se topa ' +
+      'la cantidad contra lo que la factura indica para este producto (RN-134).',
+  })
+  @IsOptional()
+  @IsUUID()
+  compraItemId?: string;
 }

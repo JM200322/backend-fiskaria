@@ -38,7 +38,7 @@ export class PagoDto {
   metodo: MetodoPagoDto;
 
   @ApiProperty({ description: 'Monto en Bs.' })
-  @IsNumber()
+  @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)
   monto: number;
 

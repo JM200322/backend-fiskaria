@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
   UnprocessableEntityException,
@@ -12,10 +13,11 @@ import {
   calcularIgtf,
   redondear,
 } from 'src/common/fiscal/calculo-fiscal';
+import { paginacion, rangoFecha } from 'src/common/date-range.util';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { AuditoriaService } from '../auditoria/auditoria.service';
 import { AuthenticatedUser } from '../auth/types/authenticated-user';
-import { ContabilidadService } from '../contabilidad/contabilidad.service';
+import { ContabilidadService, LineaAutomatica } from '../contabilidad/contabilidad.service';
 import { ImprentaService } from '../imprenta/imprenta.service';
 import { ImprentaError, ImprentaRespuesta } from '../imprenta/imprenta.types';
 import { construirPayloadFactura, DatosFacturaImprenta } from '../imprenta/mappers/factura.mapper';
@@ -48,6 +50,32 @@ const EVENTO_PAGO: Record<MetodoPago, string> = {
   PAGO_MOVIL: 'banco_pago_movil', // 1.1.2.01 Bancos
   TARJETA: 'cxc_pos', // 1.1.2.02 CxC POS
 };
+
+/**
+ * Líneas del asiento automático de una venta (RN-107). RN-010 exige que los pagos
+ * sumen total + IGTF (ver validación en emitirFactura), así que el debe queda
+ * cuadrado con solo iterar doc.pagos — el IGTF ya viene incluido en el monto de
+ * el/los pago(s) marcados como divisa, cada uno a la cuenta de su propio método.
+ * Al haber: ingreso + IVA débito (empresa) y el IGTF por separado, porque ese
+ * monto no es ingreso propio sino un pasivo a enterar al SENIAT.
+ */
+export function construirLineasAsientoVenta(doc: {
+  subtotal: Prisma.Decimal;
+  totalTax: Prisma.Decimal;
+  igtf: Prisma.Decimal;
+  pagos: { metodo: MetodoPago; monto: Prisma.Decimal }[];
+}): LineaAutomatica[] {
+  const lineas: LineaAutomatica[] = doc.pagos.map((p) => ({
+    evento: EVENTO_PAGO[p.metodo],
+    debe: p.monto,
+  }));
+  lineas.push({ evento: 'venta_ingreso', haber: doc.subtotal });
+  lineas.push({ evento: 'iva_debito', haber: doc.totalTax });
+  if (new Decimal(doc.igtf).gt(0)) {
+    lineas.push({ evento: 'igtf', haber: doc.igtf });
+  }
+  return lineas;
+}
 
 const incluir = { items: true, pagos: true, cliente: { select: { rif: true, nombre: true } } };
 
@@ -340,15 +368,13 @@ export class FacturadorService {
     } = {},
   ) {
     const contribuyenteId = this.tenantId(actor);
-    // Cap de 200 para que un cliente no pida un volcado ilimitado; default 100 (comportamiento previo).
-    const take = Number.isFinite(opts.limit) ? Math.min(Math.max(Math.trunc(opts.limit!), 1), 200) : 100;
-    const skip = Number.isFinite(opts.offset) ? Math.max(Math.trunc(opts.offset!), 0) : 0;
+    const { take, skip } = paginacion(opts.limit, opts.offset);
     return this.prisma.documentoFiscal.findMany({
       where: {
         contribuyenteId,
         tipo: opts.tipo,
         estatus: opts.estatus,
-        fecha: this.rangoFecha(opts.desde, opts.hasta),
+        fecha: rangoFecha(opts.desde, opts.hasta),
       },
       include: incluir,
       // Desempate por `id` para que la paginación por offset sea estable cuando
@@ -359,19 +385,6 @@ export class FacturadorService {
     });
   }
 
-  /** Filtro de rango sobre `fecha` (día del documento). `hasta` es inclusivo hasta fin del día. */
-  private rangoFecha(desde?: string, hasta?: string): Prisma.DateTimeFilter | undefined {
-    if (!desde && !hasta) return undefined;
-    const filtro: Prisma.DateTimeFilter = {};
-    if (desde) filtro.gte = new Date(desde);
-    if (hasta) {
-      const h = new Date(hasta);
-      if (/^\d{4}-\d{2}-\d{2}$/.test(hasta)) h.setUTCHours(23, 59, 59, 999); // solo fecha → todo el día
-      filtro.lte = h;
-    }
-    return filtro;
-  }
-
   async obtener(id: string, actor: AuthenticatedUser) {
     const contribuyenteId = this.tenantId(actor);
     const doc = await this.prisma.documentoFiscal.findFirst({
@@ -380,6 +393,50 @@ export class FacturadorService {
     });
     if (!doc) throw new NotFoundException('Documento no encontrado');
     return doc;
+  }
+
+  /**
+   * Reconstruye el JSON enviado (o que se enviaría) a Sirumatek.
+   * Solo administración del sistema (contribuyenteId null — RN-125).
+   */
+  async obtenerPayloadImprenta(id: string, actor: AuthenticatedUser) {
+    this.assertAdminSistema(actor);
+
+    const doc = await this.prisma.documentoFiscal.findUnique({
+      where: { id },
+      include: {
+        items: true,
+        cliente: true,
+        documentoOrigen: { select: { docNum: true, numeroControl: true } },
+      },
+    });
+    if (!doc) throw new NotFoundException('Documento no encontrado');
+
+    const { endpoint, payload } = this.armarPayloadImprenta(doc);
+    return {
+      docNum: doc.docNum,
+      numeroControl: doc.numeroControl,
+      tipo: doc.tipo,
+      endpoint,
+      payload,
+      nota: 'El header API-T-Token no se incluye en esta respuesta.',
+    };
+  }
+
+  /** Motivo real por el que un documento quedó "No enviado" (RN-112) — se lee de la auditoría, nunca se fabrica. */
+  async obtenerErrorEnvio(id: string, actor: AuthenticatedUser): Promise<{ error: string | null }> {
+    const doc = await this.obtener(id, actor);
+    if (doc.estatus !== EstatusDocumento.NO_ENVIADO) return { error: null };
+
+    const registros = await this.auditoria.consultar(actor.contribuyenteId ?? null, {
+      entidad: 'documento_fiscal',
+      entidadId: id,
+    });
+    const conError = registros.find(
+      (r) => r.detalle && typeof r.detalle === 'object' && 'error' in (r.detalle as object),
+    );
+    const detalle = conError?.detalle as { error?: unknown } | undefined;
+    return { error: detalle?.error != null ? String(detalle.error) : null };
   }
 
   /** Emite una Guía de Despacho (movimiento de mercancía, sin factura previa — RN-131). */
@@ -456,9 +513,9 @@ export class FacturadorService {
   }
 
   /**
-   * Asiento automático de una venta (RN-107). Una línea al debe por cada pago (cuenta según
-   * el método), el IGTF cobrado en divisas, y al haber el ingreso + IVA débito. Se invoca al
-   * EMITIR la factura (en el MVP la imprenta aún no está conectada, ver emitirFactura).
+   * Asiento automático de una venta (RN-107). Se invoca al EMITIR la factura (en el MVP la
+   * imprenta aún no está conectada, ver emitirFactura). Construcción de las líneas en
+   * construirLineasAsientoVenta().
    */
   private async postearAsientoVenta(doc: {
     id: string;
@@ -470,26 +527,12 @@ export class FacturadorService {
     igtf: Prisma.Decimal;
     pagos: { metodo: MetodoPago; monto: Prisma.Decimal }[];
   }) {
-    const lineas: { evento: string; debe?: Decimal.Value; haber?: Decimal.Value }[] = [];
-    // Debe: cada pago a la cuenta de su método (pago mixto se reparte).
-    for (const p of doc.pagos) {
-      lineas.push({ evento: EVENTO_PAGO[p.metodo], debe: p.monto });
-    }
-    // IGTF cobrado en divisas: debe en caja divisas, haber en IGTF por pagar.
-    if (new Decimal(doc.igtf).gt(0)) {
-      lineas.push({ evento: EVENTO_PAGO.DIVISAS, debe: doc.igtf });
-      lineas.push({ evento: 'igtf', haber: doc.igtf });
-    }
-    // Haber: ingreso por ventas + IVA débito fiscal.
-    lineas.push({ evento: 'venta_ingreso', haber: doc.subtotal });
-    lineas.push({ evento: 'iva_debito', haber: doc.totalTax });
-
     await this.contabilidad.registrarAutomatico({
       contribuyenteId: doc.contribuyenteId,
       fecha: doc.fecha,
       glosa: `Venta ${doc.docNum}`,
       documentoRef: doc.id,
-      lineas,
+      lineas: construirLineasAsientoVenta(doc),
     });
   }
 
@@ -544,26 +587,42 @@ export class FacturadorService {
     }
   }
 
-  /**
-   * Construye el payload según el tipo, llama a la imprenta y actualiza estatus/numeroControl.
-   * Sirve para Factura, Nota de Crédito y Nota de Débito (y para reintentos).
-   */
-  private async transmitir(
-    docId: string,
-    actor: AuthenticatedUser | null,
-    ip?: string,
-    esReintento = false,
-  ) {
-    const doc = await this.prisma.documentoFiscal.findUniqueOrThrow({
-      where: { id: docId },
-      include: {
-        items: true,
-        pagos: true,
-        cliente: true,
-        documentoOrigen: { select: { docNum: true, numeroControl: true } },
-      },
-    });
-
+  private armarPayloadImprenta(
+    doc: {
+      tipo: TipoDocumento;
+      docNum: string;
+      fecha: Date;
+      hora: string;
+      paymentMethod: string;
+      reasonTo: string | null;
+      subtotal: Prisma.Decimal;
+      totalTax: Prisma.Decimal;
+      totalWTaxes: Prisma.Decimal;
+      igtf: Prisma.Decimal;
+      tasaBcv: Prisma.Decimal;
+      thirdParty: Prisma.JsonValue;
+      datosEnvio: Prisma.JsonValue;
+      cliente: {
+        nombre: string;
+        tipoId: string;
+        rif: string;
+        direccion: string | null;
+        telefono: string | null;
+        email: string | null;
+      };
+      items: {
+        descripcion: string;
+        codigo: string;
+        cantidad: Prisma.Decimal;
+        costoUnit: Prisma.Decimal;
+        costoTotal: Prisma.Decimal;
+        taxElm: string;
+        taxPercentage: string;
+        pesoKg: Prisma.Decimal | null;
+      }[];
+      documentoOrigen: { docNum: string; numeroControl: string | null } | null;
+    },
+  ): { endpoint: string; payload: unknown } {
     const cliente = {
       nombre: doc.cliente.nombre,
       tipoId: doc.cliente.tipoId,
@@ -589,6 +648,104 @@ export class FacturadorService {
       igtf: Number(doc.igtf),
       tasaBcv: Number(doc.tasaBcv),
     };
+
+    if (doc.tipo === TipoDocumento.FACTURA) {
+      return {
+        endpoint: 'POST /api/generateBill',
+        payload: construirPayloadFactura({
+          docNum: doc.docNum,
+          cliente,
+          fecha: doc.fecha,
+          hora: doc.hora,
+          paymentMethod: doc.paymentMethod,
+          notificarCliente: true,
+          ...totales,
+          items,
+          tercero: doc.thirdParty as DatosFacturaImprenta['tercero'],
+        }),
+      };
+    }
+
+    if (doc.tipo === TipoDocumento.GUIA_DESPACHO) {
+      const envio = (doc.datosEnvio ?? {}) as {
+        conductor: { nombre: string; tipoId: string; idNum: string };
+        vehiculo: { placa: string; marca?: string; modelo?: string; color?: string };
+        direccionOrigen: string;
+        direccionDestino: string;
+        ordenCompra?: string;
+      };
+      return {
+        endpoint: 'POST /api/generateShippingOrder',
+        payload: construirPayloadGuia({
+          docNum: doc.docNum,
+          cliente,
+          conductor: envio.conductor,
+          vehiculo: envio.vehiculo,
+          ordenCompra: envio.ordenCompra,
+          motivo: doc.reasonTo ?? '',
+          direccionOrigen: envio.direccionOrigen,
+          direccionDestino: envio.direccionDestino,
+          fecha: doc.fecha,
+          hora: doc.hora,
+          subtotal: totales.subtotal,
+          totalTax: totales.totalTax,
+          totalWTaxes: totales.totalWTaxes,
+          tasaBcv: totales.tasaBcv,
+          items,
+        }),
+      };
+    }
+
+    const datosNota = {
+      docNum: doc.docNum,
+      cliente,
+      fecha: doc.fecha,
+      hora: doc.hora,
+      motivo: doc.reasonTo ?? '',
+      facturaDocNum: doc.documentoOrigen?.docNum ?? '',
+      facturaNumeroControl: doc.documentoOrigen?.numeroControl ?? null,
+      paymentMethod: doc.paymentMethod,
+      ...totales,
+      items,
+    };
+
+    if (doc.tipo === TipoDocumento.NOTA_CREDITO) {
+      return {
+        endpoint: 'POST /api/generateCreditNote',
+        payload: construirPayloadNotaCredito(datosNota),
+      };
+    }
+    if (doc.tipo === TipoDocumento.NOTA_DEBITO) {
+      return {
+        endpoint: 'POST /api/generateDebitNote',
+        payload: construirPayloadNotaDebito(datosNota),
+      };
+    }
+
+    throw new BadRequestException(`Tipo de documento sin payload de imprenta: ${doc.tipo}`);
+  }
+
+  /**
+   * Construye el payload según el tipo, llama a la imprenta y actualiza estatus/numeroControl.
+   * Sirve para Factura, Nota de Crédito y Nota de Débito (y para reintentos).
+   */
+  private async transmitir(
+    docId: string,
+    actor: AuthenticatedUser | null,
+    ip?: string,
+    esReintento = false,
+  ) {
+    const doc = await this.prisma.documentoFiscal.findUniqueOrThrow({
+      where: { id: docId },
+      include: {
+        items: true,
+        pagos: true,
+        cliente: true,
+        documentoOrigen: { select: { docNum: true, numeroControl: true } },
+      },
+    });
+
+    const { payload } = this.armarPayloadImprenta(doc);
     const accionBase: Record<string, string> = {
       NOTA_CREDITO: 'nota_credito',
       NOTA_DEBITO: 'nota_debito',
@@ -600,63 +757,22 @@ export class FacturadorService {
     try {
       let resp: ImprentaRespuesta;
       if (doc.tipo === TipoDocumento.FACTURA) {
-        resp = await this.imprenta.generarFactura(
-          construirPayloadFactura({
-            docNum: doc.docNum,
-            cliente,
-            fecha: doc.fecha,
-            hora: doc.hora,
-            paymentMethod: doc.paymentMethod,
-            notificarCliente: true,
-            ...totales,
-            items,
-            tercero: doc.thirdParty as DatosFacturaImprenta['tercero'],
-          }),
-        );
+        resp = await this.imprenta.generarFactura(doc.contribuyenteId, payload as ReturnType<typeof construirPayloadFactura>);
       } else if (doc.tipo === TipoDocumento.GUIA_DESPACHO) {
-        const envio = (doc.datosEnvio ?? {}) as {
-          conductor: { nombre: string; tipoId: string; idNum: string };
-          vehiculo: { placa: string; marca?: string; modelo?: string; color?: string };
-          direccionOrigen: string;
-          direccionDestino: string;
-          ordenCompra?: string;
-        };
         resp = await this.imprenta.generarGuiaDespacho(
-          construirPayloadGuia({
-            docNum: doc.docNum,
-            cliente,
-            conductor: envio.conductor,
-            vehiculo: envio.vehiculo,
-            ordenCompra: envio.ordenCompra,
-            motivo: doc.reasonTo ?? '',
-            direccionOrigen: envio.direccionOrigen,
-            direccionDestino: envio.direccionDestino,
-            fecha: doc.fecha,
-            hora: doc.hora,
-            subtotal: totales.subtotal,
-            totalTax: totales.totalTax,
-            totalWTaxes: totales.totalWTaxes,
-            tasaBcv: totales.tasaBcv,
-            items,
-          }),
+          doc.contribuyenteId,
+          payload as ReturnType<typeof construirPayloadGuia>,
+        );
+      } else if (doc.tipo === TipoDocumento.NOTA_CREDITO) {
+        resp = await this.imprenta.generarNotaCredito(
+          doc.contribuyenteId,
+          payload as ReturnType<typeof construirPayloadNotaCredito>,
         );
       } else {
-        const datosNota = {
-          docNum: doc.docNum,
-          cliente,
-          fecha: doc.fecha,
-          hora: doc.hora,
-          motivo: doc.reasonTo ?? '',
-          facturaDocNum: doc.documentoOrigen?.docNum ?? '',
-          facturaNumeroControl: doc.documentoOrigen?.numeroControl ?? null,
-          paymentMethod: doc.paymentMethod,
-          ...totales,
-          items,
-        };
-        resp =
-          doc.tipo === TipoDocumento.NOTA_CREDITO
-            ? await this.imprenta.generarNotaCredito(construirPayloadNotaCredito(datosNota))
-            : await this.imprenta.generarNotaDebito(construirPayloadNotaDebito(datosNota));
+        resp = await this.imprenta.generarNotaDebito(
+          doc.contribuyenteId,
+          payload as ReturnType<typeof construirPayloadNotaDebito>,
+        );
       }
 
       const actualizado = await this.prisma.documentoFiscal.update({
@@ -694,6 +810,15 @@ export class FacturadorService {
       throw new BadRequestException('La emisión requiere contexto de comercio');
     }
     return actor.contribuyenteId;
+  }
+
+  /** RN-125: soporte Sirumatek (sin comercio asociado). */
+  private assertAdminSistema(actor: AuthenticatedUser) {
+    if (actor.contribuyenteId) {
+      throw new ForbiddenException(
+        'Solo administración del sistema puede consultar el payload de imprenta',
+      );
+    }
   }
 
   private audit(

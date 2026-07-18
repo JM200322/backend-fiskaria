@@ -42,6 +42,11 @@ model Contribuyente {
   periodoIva            PeriodoIva?            @map("periodo_iva") // quincenal/mensual (RN-130)
   domicilioFiscal       String?                @map("domicilio_fiscal")
   validado              Boolean                @default(false) @map("validado") // vía API SENIAT (RN-101)
+  /// URL base de la API Sirumatek (por comercio). El token nunca se expone en lecturas.
+  imprentaBaseUrl       String?                @map("imprenta_base_url")
+  imprentaApiToken      String?                @map("imprenta_api_token")
+  /// Id interno del contribuyente en SIGAT (municipal). Se resuelve desde el RIF y se cachea (RN-140).
+  sigatContribuyenteId  Int?                   @map("sigat_contribuyente_id")
   usuarios              Usuario[]
   terceros              Tercero[]
   productos             Producto[]
@@ -168,6 +173,7 @@ model Producto {
   documentoItems       DocumentoItem[]
   ventaItems           VentaItem[]
   movimientos          MovimientoInventario[]
+  compraItems          CompraItem[]
   createdAt            DateTime               @default(now()) @map("created_at")
   updatedAt            DateTime               @updatedAt @map("updated_at")
   deletedAt            DateTime?              @map("deleted_at")
@@ -190,10 +196,13 @@ model MovimientoInventario {
   costoTotal      Decimal       @map("costo_total") @db.Decimal(18, 2)
   ivaCredito      Decimal       @default(0) @map("iva_credito") @db.Decimal(18, 2)
   referencia      String?
+  compraItemId    String?       @map("compra_item_id") // línea de factura que esta reposición cubre, si vino de una (RN-134)
+  compraItem      CompraItem?   @relation(fields: [compraItemId], references: [id])
   fecha           DateTime      @default(now())
   createdAt       DateTime      @default(now()) @map("created_at")
 
   @@index([contribuyenteId, productoId])
+  @@index([compraItemId])
   @@map("movimientos_inventario")
 }
 
@@ -405,11 +414,34 @@ model Compra {
   estado             EstatusCompra          @default(REGISTRADA)
   pagos              PagoProveedor[]
   retenciones        ComprobanteRetencion[]
+  items              CompraItem[]
   createdAt          DateTime               @default(now()) @map("created_at")
   updatedAt          DateTime               @updatedAt @map("updated_at")
 
   @@index([contribuyenteId])
+  @@index([contribuyenteId, numeroFactura]) // respaldo para el lookup de Reponer Stock (RN-134)
   @@map("compras")
+}
+
+/// Línea de una compra: qué producto y cuánto trae la factura — permite que
+/// Reponer Stock matchee la reposición a la factura exacta (RN-134) y tope la
+/// cantidad repuesta contra lo facturado. Opcional: una Compra sin líneas se
+/// comporta igual que antes (solo totales agregados, sin trazabilidad por ítem).
+model CompraItem {
+  id            String                 @id @default(uuid())
+  compraId      String                 @map("compra_id")
+  compra        Compra                 @relation(fields: [compraId], references: [id], onDelete: Cascade)
+  productoId    String                 @map("producto_id")
+  producto      Producto               @relation(fields: [productoId], references: [id])
+  cantidad      Decimal                @db.Decimal(18, 3)
+  costoUnitario Decimal                @map("costo_unitario") @db.Decimal(18, 2)
+  movimientos   MovimientoInventario[]
+  createdAt     DateTime               @default(now()) @map("created_at")
+
+  @@unique([compraId, productoId]) // a lo sumo una línea por producto por factura
+  @@index([compraId])
+  @@index([productoId])
+  @@map("compra_items")
 }
 
 model PagoProveedor {

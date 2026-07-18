@@ -70,18 +70,24 @@ export class ProductosController {
   @ApiQuery({ name: 'tipo', required: false, enum: TipoProducto })
   @ApiQuery({ name: 'bajoStock', required: false, type: Boolean })
   @ApiQuery({ name: 'categoriaComercialId', required: false })
+  @ApiQuery({ name: 'limit', required: false, description: 'Máx. registros 1-200 (default 100)' })
+  @ApiQuery({ name: 'offset', required: false, description: 'Desplazamiento para paginar (default 0)' })
   listar(
     @CurrentUser() actor: AuthenticatedUser,
     @Query('q') q?: string,
     @Query('tipo') tipo?: TipoProducto,
     @Query('bajoStock') bajoStock?: string,
     @Query('categoriaComercialId') categoriaComercialId?: string,
+    @Query('limit') limit?: string,
+    @Query('offset') offset?: string,
   ) {
     return this.productos.listar(actor, {
       q,
       tipo,
       bajoStock: bajoStock === 'true',
       categoriaComercialId,
+      limit: limit !== undefined ? Number(limit) : undefined,
+      offset: offset !== undefined ? Number(offset) : undefined,
     });
   }
 
@@ -115,6 +121,21 @@ export class ProductosController {
     @Ip() ip: string,
   ) {
     return this.productos.actualizar(id, dto, actor, ip);
+  }
+
+  @Get(':id/factura-item')
+  @RequierePermisos('productos:ver')
+  @ApiOperation({
+    summary:
+      'Busca la línea de una factura de compra para este producto (por N° de factura) — RN-134',
+  })
+  @ApiQuery({ name: 'numeroFactura', required: true })
+  buscarLineaFactura(
+    @Param('id') id: string,
+    @Query('numeroFactura') numeroFactura: string,
+    @CurrentUser() actor: AuthenticatedUser,
+  ) {
+    return this.productos.buscarLineaFactura(id, numeroFactura, actor);
   }
 
   @Post(':id/reponer')

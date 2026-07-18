@@ -7,7 +7,7 @@ import { AuditoriaService } from '../auditoria/auditoria.service';
 import { AuthenticatedUser } from '../auth/types/authenticated-user';
 import { ConfigCuentaDto, CrearAsientoDto, CrearCuentaDto } from './dto/contabilidad.dto';
 
-interface LineaAutomatica {
+export interface LineaAutomatica {
   evento: string;
   debe?: Decimal.Value;
   haber?: Decimal.Value;
@@ -167,7 +167,11 @@ export class ContabilidadService {
         return { cuentaId: cuentaPorEvento.get(l.evento)!, debe: d.toFixed(2), haber: h.toFixed(2) };
       });
       if (!redondear(debe).equals(redondear(haber))) {
-        this.logger.warn(`Asiento automático omitido (${params.glosa}): no cuadra (${debe} ≠ ${haber})`);
+        // A diferencia de la cuenta sin configurar (RN-135, degradación esperada), un
+        // descuadre siempre indica un bug en quien arma `lineas` — nunca es un estado
+        // de negocio válido. Se registra como error para que no se pierda entre los
+        // warnings esperados de configuración incompleta.
+        this.logger.error(`Asiento automático omitido (${params.glosa}): no cuadra (${debe} ≠ ${haber})`);
         return null;
       }
 

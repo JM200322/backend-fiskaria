@@ -66,7 +66,7 @@ export function formatearFechaImprenta(fecha: Date): string {
   return `${d}-${m}-${y}`;
 }
 
-/** Construye el payload de `POST /generateBill` con los nombres exactos del API. */
+/** Construye el payload de `POST /api/generateBill` con los nombres exactos del API. */
 export function construirPayloadFactura(datos: DatosFacturaImprenta): ImprentaFacturaPayload {
   const t = datos.tercero;
   return {

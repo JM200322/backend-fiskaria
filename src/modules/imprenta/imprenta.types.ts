@@ -16,7 +16,7 @@ export interface ImprentaBillItem {
   tax_percentage: string; // "16%"
 }
 
-/** Payload de `POST /generateBill`. */
+/** Payload de `POST /api/generateBill`. */
 export interface ImprentaFacturaPayload {
   type: 'FACTURA' | 'FACTURA_TERCEROS';
   client_full_name: string;
