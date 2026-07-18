@@ -2,6 +2,7 @@ import {
   calcularBaseLinea,
   calcularDocumento,
   calcularIgtf,
+  calcularMontoRetenido,
   redondear,
 } from './calculo-fiscal';
 
@@ -58,6 +59,15 @@ describe('calculo-fiscal', () => {
     });
   });
 
+  describe('calcularDocumento — alícuota adicional (31%)', () => {
+    it('calcula el IVA al 31% (lujo)', () => {
+      const r = calcularDocumento([{ cantidad: 1, precioUnitario: 1000, alicuota: 31 }]);
+      expect(r.subtotal).toBe('1000.00');
+      expect(r.totalIva).toBe('310.00');
+      expect(r.total).toBe('1310.00');
+    });
+  });
+
   describe('calcularIgtf', () => {
     it('aplica 3% por defecto sobre el monto en divisas', () => {
       expect(calcularIgtf(100)).toBe('3.00');
@@ -66,6 +76,32 @@ describe('calculo-fiscal', () => {
 
     it('permite una tasa distinta', () => {
       expect(calcularIgtf(100, 5)).toBe('5.00');
+    });
+
+    it('es 0 sobre monto 0', () => {
+      expect(calcularIgtf(0)).toBe('0.00');
+    });
+  });
+
+  describe('calcularMontoRetenido', () => {
+    it('IVA 75% sin sustraendo', () => {
+      // base = IVA de la compra (160), 75% → 120
+      expect(calcularMontoRetenido(160, 75).toFixed(2)).toBe('120.00');
+    });
+
+    it('ISLR con sustraendo (decreto 1.808)', () => {
+      // 3% de 1000 = 30; menos sustraendo 100 → max(−70, 0) = 0
+      expect(calcularMontoRetenido(1000, 3, 100).toFixed(2)).toBe('0.00');
+      // 3% de 10000 = 300; menos sustraendo 100 → 200
+      expect(calcularMontoRetenido(10000, 3, 100).toFixed(2)).toBe('200.00');
+    });
+
+    it('nunca es negativo', () => {
+      expect(calcularMontoRetenido(100, 3, 999).toFixed(2)).toBe('0.00');
+    });
+
+    it('sin sustraendo por defecto (0)', () => {
+      expect(calcularMontoRetenido(1000, 3).toFixed(2)).toBe('30.00');
     });
   });
 });
